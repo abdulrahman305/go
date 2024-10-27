@@ -251,6 +251,8 @@ type Loader struct {
 	// CgoExports records cgo-exported symbols by SymName.
 	CgoExports map[string]Sym
 
+	WasmExports []Sym
+
 	flags uint32
 
 	strictDupMsgs int // number of strict-dup warning/errors, when FlagStrictDups is enabled
@@ -1620,21 +1622,15 @@ func (l *Loader) Aux(i Sym, j int) Aux {
 // contains the information necessary for the linker to add a WebAssembly
 // import statement.
 // (https://webassembly.github.io/spec/core/syntax/modules.html#imports)
-func (l *Loader) WasmImportSym(fnSymIdx Sym) (Sym, bool) {
+func (l *Loader) WasmImportSym(fnSymIdx Sym) Sym {
 	if l.SymType(fnSymIdx) != sym.STEXT {
 		log.Fatalf("error: non-function sym %d/%s t=%s passed to WasmImportSym", fnSymIdx, l.SymName(fnSymIdx), l.SymType(fnSymIdx).String())
 	}
-	r, li := l.toLocal(fnSymIdx)
-	auxs := r.Auxs(li)
-	for i := range auxs {
-		a := &auxs[i]
-		switch a.Type() {
-		case goobj.AuxWasmImport:
-			return l.resolve(r, a.Sym()), true
-		}
-	}
+	return l.aux1(fnSymIdx, goobj.AuxWasmImport)
+}
 
-	return 0, false
+func (l *Loader) WasmTypeSym(s Sym) Sym {
+	return l.aux1(s, goobj.AuxWasmType)
 }
 
 // SEHUnwindSym returns the auxiliary SEH unwind symbol associated with
@@ -2222,6 +2218,9 @@ func (st *loadState) preloadSyms(r *oReader, kind int) {
 		}
 		if a := int32(osym.Align()); a != 0 && a > l.SymAlign(gi) {
 			l.SetSymAlign(gi, a)
+		}
+		if osym.WasmExport() {
+			l.WasmExports = append(l.WasmExports, gi)
 		}
 	}
 }

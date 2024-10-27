@@ -18,6 +18,7 @@ import (
 	"cmd/go/internal/fsys"
 	"cmd/go/internal/load"
 	"cmd/go/internal/str"
+	"cmd/internal/pathcache"
 	"cmd/internal/pkgpath"
 )
 
@@ -33,7 +34,7 @@ func init() {
 	if GccgoName == "" {
 		GccgoName = "gccgo"
 	}
-	GccgoBin, gccgoErr = cfg.LookPath(GccgoName)
+	GccgoBin, gccgoErr = pathcache.LookPath(GccgoName)
 }
 
 func (gccgoToolchain) compiler() string {
@@ -229,7 +230,7 @@ func (tools gccgoToolchain) pack(b *Builder, a *Action, afile string, ofiles []s
 	p := a.Package
 	sh := b.Shell(a)
 	objdir := a.Objdir
-	var absOfiles []string
+	absOfiles := make([]string, 0, len(ofiles))
 	for _, f := range ofiles {
 		absOfiles = append(absOfiles, mkAbs(objdir, f))
 	}

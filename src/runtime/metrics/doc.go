@@ -306,6 +306,14 @@ Below is the full list of supported metrics, ordered lexicographically.
 		The number of non-default behaviors executed by the math/rand
 		package due to a non-default GODEBUG=randautoseed=... setting.
 
+	/godebug/non-default-behavior/randcrash:events
+		The number of non-default behaviors executed by the crypto/rand
+		package due to a non-default GODEBUG=randcrash=... setting.
+
+	/godebug/non-default-behavior/randseednop:events
+		The number of non-default behaviors executed by the math/rand
+		package due to a non-default GODEBUG=randseednop=... setting.
+
 	/godebug/non-default-behavior/tarinsecurepath:events
 		The number of non-default behaviors executed by the archive/tar
 		package due to a non-default GODEBUG=tarinsecurepath=...

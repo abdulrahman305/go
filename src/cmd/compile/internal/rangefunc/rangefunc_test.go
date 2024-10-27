@@ -285,6 +285,26 @@ var fail []error = []error{
 	errorString(CERR_MISSING),
 }
 
+// TestNoVars ensures that versions of rangefunc that use zero or one
+// iteration variable (instead of two) run the proper number of times
+// and in the one variable case supply the proper values.
+// For #65236.
+func TestNoVars(t *testing.T) {
+	i, k := 0, 0
+	for range Check2(OfSliceIndex([]int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10})) {
+		i++
+	}
+	for j := range Check2(OfSliceIndex([]int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10})) {
+		k += j
+	}
+	if i != 10 {
+		t.Errorf("Expected 10, got %d", i)
+	}
+	if k != 45 {
+		t.Errorf("Expected 45, got %d", k)
+	}
+}
+
 func TestCheck(t *testing.T) {
 	i := 0
 	defer func() {
@@ -2097,5 +2117,29 @@ func TestTwoLevelReturnCheck(t *testing.T) {
 	y := f()
 	if y != 3 {
 		t.Errorf("Expected y=3, got y=%d\n", y)
+	}
+}
+
+func Bug70035(s1, s2, s3 []string) string {
+	var c1 string
+	for v1 := range slices.Values(s1) {
+		var c2 string
+		for v2 := range slices.Values(s2) {
+			var c3 string
+			for v3 := range slices.Values(s3) {
+				c3 = c3 + v3
+			}
+			c2 = c2 + v2 + c3
+		}
+		c1 = c1 + v1 + c2
+	}
+	return c1
+}
+
+func Test70035(t *testing.T) {
+	got := Bug70035([]string{"1", "2", "3"}, []string{"a", "b", "c"}, []string{"A", "B", "C"})
+	want := "1aABCbABCcABC2aABCbABCcABC3aABCbABCcABC"
+	if got != want {
+		t.Errorf("got %v, want %v", got, want)
 	}
 }

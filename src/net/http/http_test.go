@@ -12,8 +12,8 @@ import (
 	"io/fs"
 	"net/url"
 	"os"
-	"reflect"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -41,7 +41,7 @@ func TestForeachHeaderElement(t *testing.T) {
 		foreachHeaderElement(tt.in, func(v string) {
 			got = append(got, v)
 		})
-		if !reflect.DeepEqual(got, tt.want) {
+		if !slices.Equal(got, tt.want) {
 			t.Errorf("foreachHeaderElement(%q) = %q; want %q", tt.in, got, tt.want)
 		}
 	}
@@ -151,9 +151,7 @@ var forbiddenStringsFunctions = map[string]bool{
 // strings and bytes package functions. HTTP is mostly ASCII based, and doing
 // Unicode-aware case folding or space stripping can introduce vulnerabilities.
 func TestNoUnicodeStrings(t *testing.T) {
-	if !testenv.HasSrc() {
-		t.Skip("source code not available")
-	}
+	testenv.MustHaveSource(t)
 
 	re := regexp.MustCompile(`(strings|bytes).([A-Za-z]+)`)
 	if err := fs.WalkDir(os.DirFS("."), ".", func(path string, d fs.DirEntry, err error) error {

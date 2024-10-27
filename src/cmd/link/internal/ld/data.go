@@ -92,6 +92,8 @@ func maxSizeTrampolines(ctxt *Link, ldr *loader.Loader, s loader.Sym, isTramp bo
 		return n * 20 // Trampolines in ARM range from 3 to 5 instructions.
 	case ctxt.IsARM64():
 		return n * 12 // Trampolines in ARM64 are 3 instructions.
+	case ctxt.IsLOONG64():
+		return n * 12 // Trampolines in LOONG64 are 3 instructions.
 	case ctxt.IsPPC64():
 		return n * 16 // Trampolines in PPC64 are 4 instructions.
 	case ctxt.IsRISCV64():
@@ -101,7 +103,7 @@ func maxSizeTrampolines(ctxt *Link, ldr *loader.Loader, s loader.Sym, isTramp bo
 }
 
 // Detect too-far jumps in function s, and add trampolines if necessary.
-// ARM, PPC64, PPC64LE and RISCV64 support trampoline insertion for internal
+// ARM, LOONG64, PPC64, PPC64LE and RISCV64 support trampoline insertion for internal
 // and external linking. On PPC64 and PPC64LE the text sections might be split
 // but will still insert trampolines where necessary.
 func trampoline(ctxt *Link, s loader.Sym) {
@@ -114,7 +116,7 @@ func trampoline(ctxt *Link, s loader.Sym) {
 	for ri := 0; ri < relocs.Count(); ri++ {
 		r := relocs.At(ri)
 		rt := r.Type()
-		if !rt.IsDirectCallOrJump() && !isPLTCall(rt) {
+		if !rt.IsDirectCallOrJump() && !isPLTCall(ctxt.Arch, rt) {
 			continue
 		}
 		rs := r.Sym()
@@ -146,19 +148,23 @@ func trampoline(ctxt *Link, s loader.Sym) {
 
 // whether rt is a (host object) relocation that will be turned into
 // a call to PLT.
-func isPLTCall(rt objabi.RelocType) bool {
+func isPLTCall(arch *sys.Arch, rt objabi.RelocType) bool {
 	const pcrel = 1
-	switch rt {
+	switch uint32(arch.Family) | uint32(rt)<<8 {
 	// ARM64
-	case objabi.ElfRelocOffset + objabi.RelocType(elf.R_AARCH64_CALL26),
-		objabi.ElfRelocOffset + objabi.RelocType(elf.R_AARCH64_JUMP26),
-		objabi.MachoRelocOffset + MACHO_ARM64_RELOC_BRANCH26*2 + pcrel:
+	case uint32(sys.ARM64) | uint32(objabi.ElfRelocOffset+objabi.RelocType(elf.R_AARCH64_CALL26))<<8,
+		uint32(sys.ARM64) | uint32(objabi.ElfRelocOffset+objabi.RelocType(elf.R_AARCH64_JUMP26))<<8,
+		uint32(sys.ARM64) | uint32(objabi.MachoRelocOffset+MACHO_ARM64_RELOC_BRANCH26*2+pcrel)<<8:
 		return true
 
 	// ARM
-	case objabi.ElfRelocOffset + objabi.RelocType(elf.R_ARM_CALL),
-		objabi.ElfRelocOffset + objabi.RelocType(elf.R_ARM_PC24),
-		objabi.ElfRelocOffset + objabi.RelocType(elf.R_ARM_JUMP24):
+	case uint32(sys.ARM) | uint32(objabi.ElfRelocOffset+objabi.RelocType(elf.R_ARM_CALL))<<8,
+		uint32(sys.ARM) | uint32(objabi.ElfRelocOffset+objabi.RelocType(elf.R_ARM_PC24))<<8,
+		uint32(sys.ARM) | uint32(objabi.ElfRelocOffset+objabi.RelocType(elf.R_ARM_JUMP24))<<8:
+		return true
+
+	// Loong64
+	case uint32(sys.Loong64) | uint32(objabi.ElfRelocOffset+objabi.RelocType(elf.R_LARCH_B26))<<8:
 		return true
 	}
 	// TODO: other architectures.
@@ -2351,9 +2357,13 @@ func (ctxt *Link) buildinfo() {
 	s := ldr.CreateSymForUpdate("go:buildinfo", 0)
 	s.SetType(sym.SBUILDINFO)
 	s.SetAlign(16)
+
 	// The \xff is invalid UTF-8, meant to make it less likely
 	// to find one of these accidentally.
-	const prefix = "\xff Go buildinf:" // 14 bytes, plus 2 data bytes filled in below
+	const prefix = "\xff Go buildinf:" // 14 bytes, plus 1 data byte filled in below
+
+	// Header is always 32-bytes, a hold-over from before
+	// https://go.dev/cl/369977.
 	data := make([]byte, 32)
 	copy(data, prefix)
 	data[len(prefix)] = byte(ctxt.Arch.PtrSize)
@@ -2364,7 +2374,7 @@ func (ctxt *Link) buildinfo() {
 	data[len(prefix)+1] |= 2 // signals new pointer-free format
 	data = appendString(data, strdata["runtime.buildVersion"])
 	data = appendString(data, strdata["runtime.modinfo"])
-	// MacOS linker gets very upset if the size os not a multiple of alignment.
+	// MacOS linker gets very upset if the size is not a multiple of alignment.
 	for len(data)%16 != 0 {
 		data = append(data, 0)
 	}
@@ -2971,6 +2981,12 @@ func (ctxt *Link) address() []*sym.Segment {
 	ctxt.xdefine("runtime.end", sym.SBSS, int64(Segdata.Vaddr+Segdata.Length))
 
 	if fuzzCounters != nil {
+		if *flagAsan {
+			// ASAN requires that the symbol marking the end
+			// of the section be aligned on an 8 byte boundary.
+			// See issue #66966.
+			fuzzCounters.Length = uint64(Rnd(int64(fuzzCounters.Length), 8))
+		}
 		ctxt.xdefine("runtime.__start___sancov_cntrs", sym.SLIBFUZZER_8BIT_COUNTER, int64(fuzzCounters.Vaddr))
 		ctxt.xdefine("runtime.__stop___sancov_cntrs", sym.SLIBFUZZER_8BIT_COUNTER, int64(fuzzCounters.Vaddr+fuzzCounters.Length))
 		ctxt.xdefine("internal/fuzz._counters", sym.SLIBFUZZER_8BIT_COUNTER, int64(fuzzCounters.Vaddr))

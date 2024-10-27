@@ -44,6 +44,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -51,7 +52,7 @@ import (
 
 	"cmd/internal/bio"
 	"cmd/internal/goobj"
-	"cmd/internal/notsha256"
+	"cmd/internal/hash"
 	"cmd/internal/objabi"
 	"cmd/internal/sys"
 	"cmd/link/internal/loadelf"
@@ -1012,12 +1013,12 @@ func typeSymbolMangle(name string) string {
 		return name
 	}
 	if isType {
-		hash := notsha256.Sum256([]byte(name[5:]))
+		hb := hash.Sum20([]byte(name[5:]))
 		prefix := "type:"
 		if name[5] == '.' {
 			prefix = "type:."
 		}
-		return prefix + base64.StdEncoding.EncodeToString(hash[:6])
+		return prefix + base64.StdEncoding.EncodeToString(hb[:6])
 	}
 	// instantiated symbol, replace type name in []
 	i := strings.IndexByte(name, '[')
@@ -1025,8 +1026,8 @@ func typeSymbolMangle(name string) string {
 	if j == -1 || j <= i {
 		j = len(name)
 	}
-	hash := notsha256.Sum256([]byte(name[i+1 : j]))
-	return name[:i+1] + base64.StdEncoding.EncodeToString(hash[:6]) + name[j:]
+	hb := hash.Sum20([]byte(name[i+1 : j]))
+	return name[:i+1] + base64.StdEncoding.EncodeToString(hb[:6]) + name[j:]
 }
 
 /*
@@ -1275,7 +1276,7 @@ func hostlinksetup(ctxt *Link) {
 // cleanTimeStamps resets the timestamps for the specified list of
 // existing files to the Unix epoch (1970-01-01 00:00:00 +0000 UTC).
 // We take this step in order to help preserve reproducible builds;
-// this seems to be primarily needed for external linking on on Darwin
+// this seems to be primarily needed for external linking on Darwin
 // with later versions of xcode, which (unfortunately) seem to want to
 // incorporate object file times into the final output file's build
 // ID. See issue 64947 for the unpleasant details.
@@ -1466,6 +1467,9 @@ func (ctxt *Link) hostlink() {
 				// and referenced symbols so the dynamic linker can resolve them.
 				argv = append(argv, "-Wl,-x")
 			}
+		}
+		if *flagHostBuildid == "none" {
+			argv = append(argv, "-Wl,-no_uuid")
 		}
 	case objabi.Hopenbsd:
 		argv = append(argv, "-pthread")
@@ -1697,8 +1701,12 @@ func (ctxt *Link) hostlink() {
 		argv = append(argv, "-fuse-ld="+altLinker)
 	}
 
-	if ctxt.IsELF && len(buildinfo) > 0 {
-		argv = append(argv, fmt.Sprintf("-Wl,--build-id=0x%x", buildinfo))
+	if ctxt.IsELF && linkerFlagSupported(ctxt.Arch, argv[0], "", "-Wl,--build-id=0x1234567890abcdef") { // Solaris ld doesn't support --build-id.
+		if len(buildinfo) > 0 {
+			argv = append(argv, fmt.Sprintf("-Wl,--build-id=0x%x", buildinfo))
+		} else if *flagHostBuildid == "none" {
+			argv = append(argv, "-Wl,--build-id=none")
+		}
 	}
 
 	// On Windows, given -o foo, GCC will append ".exe" to produce
@@ -2058,7 +2066,7 @@ func (ctxt *Link) hostlink() {
 			uuidUpdated = true
 		}
 	}
-	if ctxt.IsDarwin() && !uuidUpdated && *flagBuildid != "" {
+	if ctxt.IsDarwin() && !uuidUpdated && len(buildinfo) > 0 {
 		updateMachoOutFile("rewriting uuid",
 			func(ctxt *Link, exef *os.File, exem *macho.File, outexe string) error {
 				return machoRewriteUuid(ctxt, exef, exem, outexe)
@@ -2125,7 +2133,7 @@ func linkerFlagSupported(arch *sys.Arch, linker, altLinker, flag string) bool {
 
 	flags := hostlinkArchArgs(arch)
 
-	moreFlags := trimLinkerArgv(append(flagExtldflags, ldflag...))
+	moreFlags := trimLinkerArgv(append(ldflag, flagExtldflags...))
 	flags = append(flags, moreFlags...)
 
 	if altLinker != "" {
@@ -2182,9 +2190,9 @@ func trimLinkerArgv(argv []string) []string {
 		} else if skip {
 			skip = false
 		} else if f == "" || f[0] != '-' {
-		} else if contains(flagsWithNextArgSkip, f) {
+		} else if slices.Contains(flagsWithNextArgSkip, f) {
 			skip = true
-		} else if contains(flagsWithNextArgKeep, f) {
+		} else if slices.Contains(flagsWithNextArgKeep, f) {
 			flags = append(flags, f)
 			keep = true
 		} else {

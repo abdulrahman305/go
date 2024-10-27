@@ -5,7 +5,7 @@
 package ld
 
 import (
-	"cmd/internal/notsha256"
+	"cmd/internal/hash"
 	"cmd/internal/objabi"
 	"cmd/internal/sys"
 	"cmd/link/internal/loader"
@@ -18,7 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"sort"
+	"slices"
 	"strings"
 )
 
@@ -805,14 +805,23 @@ func elfwritefreebsdsig(out *OutBuf) int {
 	return int(sh.Size)
 }
 
-func addbuildinfo(val string) {
+func addbuildinfo(ctxt *Link) {
+	val := *flagHostBuildid
+	if val == "" || val == "none" {
+		return
+	}
 	if val == "gobuildid" {
 		buildID := *flagBuildid
 		if buildID == "" {
 			Exitf("-B gobuildid requires a Go build ID supplied via -buildid")
 		}
 
-		hashedBuildID := notsha256.Sum256([]byte(buildID))
+		if ctxt.IsDarwin() {
+			buildinfo = uuidFromGoBuildId(buildID)
+			return
+		}
+
+		hashedBuildID := hash.Sum32([]byte(buildID))
 		buildinfo = hashedBuildID[:20]
 
 		return
@@ -821,11 +830,13 @@ func addbuildinfo(val string) {
 	if !strings.HasPrefix(val, "0x") {
 		Exitf("-B argument must start with 0x: %s", val)
 	}
-
 	ov := val
 	val = val[2:]
 
-	const maxLen = 32
+	maxLen := 32
+	if ctxt.IsDarwin() {
+		maxLen = 16
+	}
 	if hex.DecodedLen(len(val)) > maxLen {
 		Exitf("-B option too long (max %d digits): %s", maxLen, ov)
 	}
@@ -1677,10 +1688,11 @@ func (ctxt *Link) doelf() {
 		sb.SetType(sym.SRODATA)
 		ldr.SetAttrSpecial(s, true)
 		sb.SetReachable(true)
-		sb.SetSize(notsha256.Size)
-
-		sort.Sort(byPkg(ctxt.Library))
-		h := notsha256.New()
+		sb.SetSize(hash.Size20)
+		slices.SortFunc(ctxt.Library, func(a, b *sym.Library) int {
+			return strings.Compare(a.Pkg, b.Pkg)
+		})
+		h := hash.New20()
 		for _, l := range ctxt.Library {
 			h.Write(l.Fingerprint[:])
 		}

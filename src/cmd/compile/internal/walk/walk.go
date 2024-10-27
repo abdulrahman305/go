@@ -7,6 +7,7 @@ package walk
 import (
 	"fmt"
 	"internal/abi"
+	"internal/buildcfg"
 
 	"cmd/compile/internal/base"
 	"cmd/compile/internal/ir"
@@ -184,7 +185,20 @@ var mapassign = mkmapnames("mapassign", "ptr")
 var mapdelete = mkmapnames("mapdelete", "")
 
 func mapfast(t *types.Type) int {
-	if t.Elem().Size() > abi.MapMaxElemBytes {
+	if buildcfg.Experiment.SwissMap {
+		return mapfastSwiss(t)
+	}
+	return mapfastOld(t)
+}
+
+func mapfastSwiss(t *types.Type) int {
+	// TODO(#54766): Temporarily avoid specialized variants to minimize
+	// required code.
+	return mapslow
+}
+
+func mapfastOld(t *types.Type) int {
+	if t.Elem().Size() > abi.OldMapMaxElemBytes {
 		return mapslow
 	}
 	switch reflectdata.AlgType(t.Key()) {
@@ -328,7 +342,7 @@ func mayCall(n ir.Node) bool {
 			ir.OCAP, ir.OIMAG, ir.OLEN, ir.OREAL,
 			ir.OCONVNOP, ir.ODOT,
 			ir.OCFUNC, ir.OIDATA, ir.OITAB, ir.OSPTR,
-			ir.OBYTES2STRTMP, ir.OGETG, ir.OGETCALLERPC, ir.OGETCALLERSP, ir.OSLICEHEADER, ir.OSTRINGHEADER:
+			ir.OBYTES2STRTMP, ir.OGETG, ir.OGETCALLERSP, ir.OSLICEHEADER, ir.OSTRINGHEADER:
 			// ok: operations that don't require function calls.
 			// Expand as needed.
 		}

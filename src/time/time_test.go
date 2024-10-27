@@ -21,6 +21,26 @@ import (
 	. "time"
 )
 
+func TestInternal(t *testing.T) {
+	for _, tt := range InternalTests {
+		t.Run(tt.Name, func(t *testing.T) { tt.Test(t) })
+	}
+}
+
+func TestZeroTime(t *testing.T) {
+	var zero Time
+	year, month, day := zero.Date()
+	hour, min, sec := zero.Clock()
+	nsec := zero.Nanosecond()
+	yday := zero.YearDay()
+	wday := zero.Weekday()
+	if year != 1 || month != January || day != 1 || hour != 0 || min != 0 || sec != 0 || nsec != 0 || yday != 1 || wday != Monday {
+		t.Errorf("zero time = %v %v %v year %v %02d:%02d:%02d.%09d yday %d want Monday Jan 1 year 1 00:00:00.000000000 yday 1",
+			wday, month, day, year, hour, min, sec, nsec, yday)
+	}
+
+}
+
 // We should be in PST/PDT, but if the time zone files are missing we
 // won't be. The purpose of this test is to at least explain why some of
 // the subsequent tests fail.
@@ -102,75 +122,75 @@ func same(t Time, u *parsedTime) bool {
 		t.Weekday() == u.Weekday
 }
 
-func TestSecondsToUTC(t *testing.T) {
+func TestUnixUTC(t *testing.T) {
 	for _, test := range utctests {
 		sec := test.seconds
 		golden := &test.golden
 		tm := Unix(sec, 0).UTC()
 		newsec := tm.Unix()
 		if newsec != sec {
-			t.Errorf("SecondsToUTC(%d).Seconds() = %d", sec, newsec)
+			t.Errorf("Unix(%d, 0).Unix() = %d", sec, newsec)
 		}
 		if !same(tm, golden) {
-			t.Errorf("SecondsToUTC(%d):  // %#v", sec, tm)
+			t.Errorf("Unix(%d, 0):  // %#v", sec, tm)
 			t.Errorf("  want=%+v", *golden)
 			t.Errorf("  have=%v", tm.Format(RFC3339+" MST"))
 		}
 	}
 }
 
-func TestNanosecondsToUTC(t *testing.T) {
+func TestUnixNanoUTC(t *testing.T) {
 	for _, test := range nanoutctests {
 		golden := &test.golden
 		nsec := test.seconds*1e9 + int64(golden.Nanosecond)
 		tm := Unix(0, nsec).UTC()
 		newnsec := tm.Unix()*1e9 + int64(tm.Nanosecond())
 		if newnsec != nsec {
-			t.Errorf("NanosecondsToUTC(%d).Nanoseconds() = %d", nsec, newnsec)
+			t.Errorf("Unix(0, %d).Nanoseconds() = %d", nsec, newnsec)
 		}
 		if !same(tm, golden) {
-			t.Errorf("NanosecondsToUTC(%d):", nsec)
+			t.Errorf("Unix(0, %d):", nsec)
 			t.Errorf("  want=%+v", *golden)
 			t.Errorf("  have=%+v", tm.Format(RFC3339+" MST"))
 		}
 	}
 }
 
-func TestSecondsToLocalTime(t *testing.T) {
+func TestUnix(t *testing.T) {
 	for _, test := range localtests {
 		sec := test.seconds
 		golden := &test.golden
 		tm := Unix(sec, 0)
 		newsec := tm.Unix()
 		if newsec != sec {
-			t.Errorf("SecondsToLocalTime(%d).Seconds() = %d", sec, newsec)
+			t.Errorf("Unix(%d, 0).Seconds() = %d", sec, newsec)
 		}
 		if !same(tm, golden) {
-			t.Errorf("SecondsToLocalTime(%d):", sec)
+			t.Errorf("Unix(%d, 0):", sec)
 			t.Errorf("  want=%+v", *golden)
 			t.Errorf("  have=%+v", tm.Format(RFC3339+" MST"))
 		}
 	}
 }
 
-func TestNanosecondsToLocalTime(t *testing.T) {
+func TestUnixNano(t *testing.T) {
 	for _, test := range nanolocaltests {
 		golden := &test.golden
 		nsec := test.seconds*1e9 + int64(golden.Nanosecond)
 		tm := Unix(0, nsec)
 		newnsec := tm.Unix()*1e9 + int64(tm.Nanosecond())
 		if newnsec != nsec {
-			t.Errorf("NanosecondsToLocalTime(%d).Seconds() = %d", nsec, newnsec)
+			t.Errorf("Unix(0, %d).Seconds() = %d", nsec, newnsec)
 		}
 		if !same(tm, golden) {
-			t.Errorf("NanosecondsToLocalTime(%d):", nsec)
+			t.Errorf("Unix(0, %d):", nsec)
 			t.Errorf("  want=%+v", *golden)
 			t.Errorf("  have=%+v", tm.Format(RFC3339+" MST"))
 		}
 	}
 }
 
-func TestSecondsToUTCAndBack(t *testing.T) {
+func TestUnixUTCAndBack(t *testing.T) {
 	f := func(sec int64) bool { return Unix(sec, 0).UTC().Unix() == sec }
 	f32 := func(sec int32) bool { return f(int64(sec)) }
 	cfg := &quick.Config{MaxCount: 10000}
@@ -184,7 +204,7 @@ func TestSecondsToUTCAndBack(t *testing.T) {
 	}
 }
 
-func TestNanosecondsToUTCAndBack(t *testing.T) {
+func TestUnixNanoUTCAndBack(t *testing.T) {
 	f := func(nsec int64) bool {
 		t := Unix(0, nsec).UTC()
 		ns := t.Unix()*1e9 + int64(t.Nanosecond())
@@ -646,6 +666,9 @@ var dateTests = []struct {
 	{2012, 1, -43, 7, 56, 35, 0, Local, 1321631795},                 // Jan -52 7:56:35 2012
 	{2012, int(January - 2), 18, 7, 56, 35, 0, Local, 1321631795},   // (Jan-2) 18 7:56:35 2012
 	{2010, int(December + 11), 18, 7, 56, 35, 0, Local, 1321631795}, // (Dec+11) 18 7:56:35 2010
+	{1970, 1, 15297, 7, 56, 35, 0, Local, 1321631795},               // large number of days
+
+	{1970, 1, -25508, 0, 0, 0, 0, Local, -2203948800}, // negative Unix time
 }
 
 func TestDate(t *testing.T) {
@@ -683,6 +706,13 @@ func TestAddDate(t *testing.T) {
 				at.years, at.months, at.days,
 				time, t1)
 		}
+	}
+
+	t2 := Date(1899, 12, 31, 0, 0, 0, 0, UTC)
+	days := t2.Unix() / (24 * 60 * 60)
+	t3 := Unix(0, 0).AddDate(0, 0, int(days))
+	if !t2.Equal(t3) {
+		t.Errorf("Adddate(0, 0, %d) = %v, want %v", days, t3, t2)
 	}
 }
 
@@ -884,6 +914,16 @@ func TestMarshalInvalidTimes(t *testing.T) {
 			t.Errorf("(%v).MarshalText() = %q, want nil", tt.time, b)
 		case err == nil || err.Error() != want:
 			t.Errorf("(%v).MarshalText() error = %v, want %v", tt.time, err, want)
+		}
+
+		buf := make([]byte, 0, 64)
+		want = strings.ReplaceAll(tt.want, "MarshalJSON", "AppendText")
+		b, err = tt.time.AppendText(buf)
+		switch {
+		case b != nil:
+			t.Errorf("(%v).AppendText() = %q, want nil", tt.time, b)
+		case err == nil || err.Error() != want:
+			t.Errorf("(%v).AppendText() error = %v, want %v", tt.time, err, want)
 		}
 	}
 }
@@ -1373,6 +1413,13 @@ var defaultLocTests = []struct {
 	{"UnixMilli", func(t1, t2 Time) bool { return t1.UnixMilli() == t2.UnixMilli() }},
 	{"UnixMicro", func(t1, t2 Time) bool { return t1.UnixMicro() == t2.UnixMicro() }},
 
+	{"AppendBinary", func(t1, t2 Time) bool {
+		buf1 := make([]byte, 4, 32)
+		buf2 := make([]byte, 4, 32)
+		a1, b1 := t1.AppendBinary(buf1)
+		a2, b2 := t2.AppendBinary(buf2)
+		return bytes.Equal(a1[4:], a2[4:]) && b1 == b2
+	}},
 	{"MarshalBinary", func(t1, t2 Time) bool {
 		a1, b1 := t1.MarshalBinary()
 		a2, b2 := t2.MarshalBinary()
@@ -1387,6 +1434,14 @@ var defaultLocTests = []struct {
 		a1, b1 := t1.MarshalJSON()
 		a2, b2 := t2.MarshalJSON()
 		return bytes.Equal(a1, a2) && b1 == b2
+	}},
+	{"AppendText", func(t1, t2 Time) bool {
+		maxCap := len(RFC3339Nano) + 4
+		buf1 := make([]byte, 4, maxCap)
+		buf2 := make([]byte, 4, maxCap)
+		a1, b1 := t1.AppendText(buf1)
+		a2, b2 := t2.AppendText(buf2)
+		return bytes.Equal(a1[4:], a2[4:]) && b1 == b2
 	}},
 	{"MarshalText", func(t1, t2 Time) bool {
 		a1, b1 := t1.MarshalText()
@@ -1477,6 +1532,13 @@ func BenchmarkMarshalText(b *testing.B) {
 	t := Now()
 	for i := 0; i < b.N; i++ {
 		t.MarshalText()
+	}
+}
+
+func BenchmarkMarshalBinary(b *testing.B) {
+	t := Now()
+	for i := 0; i < b.N; i++ {
+		t.MarshalBinary()
 	}
 }
 

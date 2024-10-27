@@ -9,6 +9,7 @@ import (
 	"flag"
 	"fmt"
 	"internal/abi"
+	"internal/goexperiment"
 	"internal/testenv"
 	"os"
 	"os/exec"
@@ -111,6 +112,44 @@ func checkCleanBacktrace(t *testing.T, backtrace string) {
 	// TODO(mundaym): check for unknown frames (e.g. "??").
 }
 
+// checkPtraceScope checks the value of the kernel parameter ptrace_scope,
+// skips the test when gdb cannot attach to the target process via ptrace.
+// See issue 69932
+//
+// 0 - Default attach security permissions.
+// 1 - Restricted attach. Only child processes plus normal permissions.
+// 2 - Admin-only attach. Only executables with CAP_SYS_PTRACE.
+// 3 - No attach. No process may call ptrace at all. Irrevocable.
+func checkPtraceScope(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		return
+	}
+
+	// If the Linux kernel does not have the YAMA module enabled,
+	// there will be no ptrace_scope file, which does not affect the tests.
+	path := "/proc/sys/kernel/yama/ptrace_scope"
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("failed to read file: %v", err)
+	}
+	value, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil {
+		t.Fatalf("failed converting value to int: %v", err)
+	}
+	switch value {
+	case 3:
+		t.Skip("skipping ptrace: Operation not permitted")
+	case 2:
+		if os.Geteuid() != 0 {
+			t.Skip("skipping ptrace: Operation not permitted with non-root user")
+		}
+	}
+}
+
 // NOTE: the maps below are allocated larger than abi.MapBucketCount
 // to ensure that they are not "optimized out".
 
@@ -119,8 +158,8 @@ import "fmt"
 import "runtime"
 var gslice []string
 func main() {
-	mapvar := make(map[string]string, ` + strconv.FormatInt(abi.MapBucketCount+9, 10) + `)
-	slicemap := make(map[string][]string,` + strconv.FormatInt(abi.MapBucketCount+3, 10) + `)
+	mapvar := make(map[string]string, ` + strconv.FormatInt(abi.OldMapBucketCount+9, 10) + `)
+	slicemap := make(map[string][]string,` + strconv.FormatInt(abi.OldMapBucketCount+3, 10) + `)
     chanint := make(chan int, 10)
     chanstr := make(chan string, 10)
     chanint <- 99
@@ -193,6 +232,7 @@ func testGdbPython(t *testing.T, cgo bool) {
 	t.Parallel()
 	checkGdbVersion(t)
 	checkGdbPython(t)
+	checkPtraceScope(t)
 
 	dir := t.TempDir()
 
@@ -416,6 +456,7 @@ func TestGdbBacktrace(t *testing.T) {
 	checkGdbEnvironment(t)
 	t.Parallel()
 	checkGdbVersion(t)
+	checkPtraceScope(t)
 
 	dir := t.TempDir()
 
@@ -530,6 +571,7 @@ func TestGdbAutotmpTypes(t *testing.T) {
 	checkGdbEnvironment(t)
 	t.Parallel()
 	checkGdbVersion(t)
+	checkPtraceScope(t)
 
 	if runtime.GOOS == "aix" && testing.Short() {
 		t.Skip("TestGdbAutotmpTypes is too slow on aix/ppc64")
@@ -575,15 +617,26 @@ func TestGdbAutotmpTypes(t *testing.T) {
 
 	// Check that the backtrace matches the source code.
 	types := []string{
-		"[]main.astruct;",
-		"bucket<string,main.astruct>;",
-		"hash<string,main.astruct>;",
-		"main.astruct;",
-		"hash<string,main.astruct> * map[string]main.astruct;",
+		"[]main.astruct",
+		"main.astruct",
+	}
+	if goexperiment.SwissMap {
+		types = append(types, []string{
+			"groupReference<string,main.astruct>",
+			"table<string,main.astruct>",
+			"map<string,main.astruct>",
+			"map<string,main.astruct> * map[string]main.astruct",
+		}...)
+	} else {
+		types = append(types, []string{
+			"bucket<string,main.astruct>",
+			"hash<string,main.astruct>",
+			"hash<string,main.astruct> * map[string]main.astruct",
+		}...)
 	}
 	for _, name := range types {
 		if !strings.Contains(sgot, name) {
-			t.Fatalf("could not find %s in 'info typrs astruct' output", name)
+			t.Fatalf("could not find %q in 'info typrs astruct' output", name)
 		}
 	}
 }
@@ -604,6 +657,7 @@ func TestGdbConst(t *testing.T) {
 	checkGdbEnvironment(t)
 	t.Parallel()
 	checkGdbVersion(t)
+	checkPtraceScope(t)
 
 	dir := t.TempDir()
 
@@ -668,6 +722,7 @@ func TestGdbPanic(t *testing.T) {
 	checkGdbEnvironment(t)
 	t.Parallel()
 	checkGdbVersion(t)
+	checkPtraceScope(t)
 
 	if runtime.GOOS == "windows" {
 		t.Skip("no signals on windows")
@@ -747,6 +802,7 @@ func TestGdbInfCallstack(t *testing.T) {
 
 	t.Parallel()
 	checkGdbVersion(t)
+	checkPtraceScope(t)
 
 	dir := t.TempDir()
 

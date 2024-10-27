@@ -11,8 +11,8 @@ import (
 	"internal/goos"
 	"internal/runtime/atomic"
 	"internal/runtime/exithook"
+	"internal/runtime/sys"
 	"internal/stringslite"
-	"runtime/internal/sys"
 	"unsafe"
 )
 
@@ -266,6 +266,17 @@ func main() {
 	if isarchive || islibrary {
 		// A program compiled with -buildmode=c-archive or c-shared
 		// has a main, but it is not executed.
+		if GOARCH == "wasm" {
+			// On Wasm, pause makes it return to the host.
+			// Unlike cgo callbacks where Ms are created on demand,
+			// on Wasm we have only one M. So we keep this M (and this
+			// G) for callbacks.
+			// Using the caller's SP unwinds this frame and backs to
+			// goexit. The -16 is: 8 for goexit's (fake) return PC,
+			// and pause's epilogue pops 8.
+			pause(sys.GetCallerSP() - 16) // should not return
+			panic("unreachable")
+		}
 		return
 	}
 	fn := main_main // make an indirect call, as the linker doesn't know the address of the main package when laying down the runtime
@@ -1800,7 +1811,7 @@ func mstart0() {
 	mexit(osStack)
 }
 
-// The go:noinline is to guarantee the getcallerpc/getcallersp below are safe,
+// The go:noinline is to guarantee the sys.GetCallerPC/sys.GetCallerSP below are safe,
 // so that we can set up g0.sched to return to the call of mstart1 above.
 //
 //go:noinline
@@ -1818,8 +1829,8 @@ func mstart1() {
 	// And goexit0 does a gogo that needs to return from mstart1
 	// and let mstart0 exit the thread.
 	gp.sched.g = guintptr(unsafe.Pointer(gp))
-	gp.sched.pc = getcallerpc()
-	gp.sched.sp = getcallersp()
+	gp.sched.pc = sys.GetCallerPC()
+	gp.sched.sp = sys.GetCallerSP()
 
 	asminit()
 	minit()
@@ -2318,7 +2329,7 @@ func needm(signal bool) {
 	// Install g (= m->g0) and set the stack bounds
 	// to match the current stack.
 	setg(mp.g0)
-	sp := getcallersp()
+	sp := sys.GetCallerSP()
 	callbackUpdateSystemStack(mp, sp, signal)
 
 	// Should mark we are already in Go now.
@@ -4310,6 +4321,9 @@ func gdestroy(gp *g) {
 
 	if locked && mp.lockedInt != 0 {
 		print("runtime: mp.lockedInt = ", mp.lockedInt, "\n")
+		if mp.isextra {
+			throw("runtime.Goexit called in a thread that was not created by the Go runtime")
+		}
 		throw("exited a goroutine internally locked to the OS thread")
 	}
 	gfput(pp, gp)
@@ -4415,7 +4429,13 @@ func reentersyscall(pc, sp, bp uintptr) {
 	}
 	if gp.syscallsp < gp.stack.lo || gp.stack.hi < gp.syscallsp {
 		systemstack(func() {
-			print("entersyscall inconsistent ", hex(gp.syscallsp), " [", hex(gp.stack.lo), ",", hex(gp.stack.hi), "]\n")
+			print("entersyscall inconsistent sp ", hex(gp.syscallsp), " [", hex(gp.stack.lo), ",", hex(gp.stack.hi), "]\n")
+			throw("entersyscall")
+		})
+	}
+	if gp.syscallbp != 0 && gp.syscallbp < gp.stack.lo || gp.stack.hi < gp.syscallbp {
+		systemstack(func() {
+			print("entersyscall inconsistent bp ", hex(gp.syscallbp), " [", hex(gp.stack.lo), ",", hex(gp.stack.hi), "]\n")
 			throw("entersyscall")
 		})
 	}
@@ -4476,7 +4496,7 @@ func entersyscall() {
 	// the stack. This results in exceeding the nosplit stack requirements
 	// on some platforms.
 	fp := getcallerfp()
-	reentersyscall(getcallerpc(), getcallersp(), fp)
+	reentersyscall(sys.GetCallerPC(), sys.GetCallerSP(), fp)
 }
 
 func entersyscall_sysmon() {
@@ -4541,8 +4561,8 @@ func entersyscallblock() {
 	gp.m.p.ptr().syscalltick++
 
 	// Leave SP around for GC and traceback.
-	pc := getcallerpc()
-	sp := getcallersp()
+	pc := sys.GetCallerPC()
+	sp := sys.GetCallerSP()
 	bp := getcallerfp()
 	save(pc, sp, bp)
 	gp.syscallsp = gp.sched.sp
@@ -4553,14 +4573,20 @@ func entersyscallblock() {
 		sp2 := gp.sched.sp
 		sp3 := gp.syscallsp
 		systemstack(func() {
-			print("entersyscallblock inconsistent ", hex(sp1), " ", hex(sp2), " ", hex(sp3), " [", hex(gp.stack.lo), ",", hex(gp.stack.hi), "]\n")
+			print("entersyscallblock inconsistent sp ", hex(sp1), " ", hex(sp2), " ", hex(sp3), " [", hex(gp.stack.lo), ",", hex(gp.stack.hi), "]\n")
 			throw("entersyscallblock")
 		})
 	}
 	casgstatus(gp, _Grunning, _Gsyscall)
 	if gp.syscallsp < gp.stack.lo || gp.stack.hi < gp.syscallsp {
 		systemstack(func() {
-			print("entersyscallblock inconsistent ", hex(sp), " ", hex(gp.sched.sp), " ", hex(gp.syscallsp), " [", hex(gp.stack.lo), ",", hex(gp.stack.hi), "]\n")
+			print("entersyscallblock inconsistent sp ", hex(sp), " ", hex(gp.sched.sp), " ", hex(gp.syscallsp), " [", hex(gp.stack.lo), ",", hex(gp.stack.hi), "]\n")
+			throw("entersyscallblock")
+		})
+	}
+	if gp.syscallbp != 0 && gp.syscallbp < gp.stack.lo || gp.stack.hi < gp.syscallbp {
+		systemstack(func() {
+			print("entersyscallblock inconsistent bp ", hex(bp), " ", hex(gp.sched.bp), " ", hex(gp.syscallbp), " [", hex(gp.stack.lo), ",", hex(gp.stack.hi), "]\n")
 			throw("entersyscallblock")
 		})
 	}
@@ -4568,7 +4594,7 @@ func entersyscallblock() {
 	systemstack(entersyscallblock_handoff)
 
 	// Resave for traceback during blocked call.
-	save(getcallerpc(), getcallersp(), getcallerfp())
+	save(sys.GetCallerPC(), sys.GetCallerSP(), getcallerfp())
 
 	gp.m.locks--
 }
@@ -4606,7 +4632,7 @@ func exitsyscall() {
 	gp := getg()
 
 	gp.m.locks++ // see comment in entersyscall
-	if getcallersp() > gp.syscallsp {
+	if sys.GetCallerSP() > gp.syscallsp {
 		throw("exitsyscall: syscall frame is no longer valid")
 	}
 
@@ -4822,7 +4848,6 @@ func exitsyscall0(gp *g) {
 // syscall_runtime_BeforeFork is for package syscall,
 // but widely used packages access it using linkname.
 // Notable members of the hall of shame include:
-//   - github.com/containerd/containerd
 //   - gvisor.dev/gvisor
 //
 // Do not remove or change the type signature.
@@ -4852,7 +4877,6 @@ func syscall_runtime_BeforeFork() {
 // syscall_runtime_AfterFork is for package syscall,
 // but widely used packages access it using linkname.
 // Notable members of the hall of shame include:
-//   - github.com/containerd/containerd
 //   - gvisor.dev/gvisor
 //
 // Do not remove or change the type signature.
@@ -4886,7 +4910,6 @@ var inForkedChild bool
 // syscall_runtime_AfterForkInChild is for package syscall,
 // but widely used packages access it using linkname.
 // Notable members of the hall of shame include:
-//   - github.com/containerd/containerd
 //   - gvisor.dev/gvisor
 //
 // Do not remove or change the type signature.
@@ -4961,7 +4984,7 @@ func malg(stacksize int32) *g {
 // The compiler turns a go statement into a call to this.
 func newproc(fn *funcval) {
 	gp := getg()
-	pc := getcallerpc()
+	pc := sys.GetCallerPC()
 	systemstack(func() {
 		newg := newproc1(fn, gp, pc, false, waitReasonZero)
 
@@ -5913,7 +5936,9 @@ func checkdead() {
 	// For -buildmode=c-shared or -buildmode=c-archive it's OK if
 	// there are no running goroutines. The calling program is
 	// assumed to be running.
-	if islibrary || isarchive {
+	// One exception is Wasm, which is single-threaded. If we are
+	// in Go and all goroutines are blocked, it deadlocks.
+	if (islibrary || isarchive) && GOARCH != "wasm" {
 		return
 	}
 

@@ -79,7 +79,7 @@ and its test source files to identify significant problems. If go vet
 finds any problems, go test reports those and does not run the test
 binary. Only a high-confidence subset of the default go vet checks are
 used. That subset is: atomic, bool, buildtags, directive, errorsas,
-ifaceassert, nilfunc, printf, and stringintconv. You can see
+ifaceassert, nilfunc, printf, stringintconv, and tests. You can see
 the documentation for these and other vet tests via "go doc cmd/vet".
 To disable the running of go vet, use the -vet=off flag. To run all
 checks, use the -vet=all flag.
@@ -132,10 +132,10 @@ If a run of go test has any test or non-test flags outside this set,
 the result is not cached. To disable test caching, use any test flag
 or argument other than the cacheable flags. The idiomatic way to disable
 test caching explicitly is to use -count=1. Tests that open files within
-the package's source root (usually $GOPATH) or that consult environment
-variables only match future runs in which the files and environment
-variables are unchanged. A cached test result is treated as executing
-in no time at all, so a successful package test result will be cached and
+the package's module or that consult environment variables only
+match future runs in which the files and environment variables are
+unchanged. A cached test result is treated as executing in no time
+at all, so a successful package test result will be cached and
 reused regardless of -timeout setting.
 
 In addition to the build flags, the flags handled by 'go test' itself are:
@@ -569,7 +569,7 @@ func (f *testVFlag) Set(arg string) error {
 	}
 	if arg == "test2json" {
 		f.on = true
-		f.json = arg == "test2json"
+		f.json = true
 		return nil
 	}
 	return fmt.Errorf("invalid flag -test.v=%s", arg)
@@ -668,7 +668,7 @@ var defaultVetFlags = []string{
 	"-slog",
 	"-stringintconv",
 	// "-structtags",
-	// "-tests",
+	"-tests",
 	// "-unreachable",
 	// "-unsafeptr",
 	// "-unusedresult",
@@ -929,15 +929,16 @@ func runTest(ctx context.Context, cmd *base.Command, args []string) {
 		// unlikely to be useful. Most of these are used by the testing or
 		// internal/fuzz packages concurrently with fuzzing.
 		var skipInstrumentation = map[string]bool{
-			"context":       true,
-			"internal/fuzz": true,
-			"reflect":       true,
-			"runtime":       true,
-			"sync":          true,
-			"sync/atomic":   true,
-			"syscall":       true,
-			"testing":       true,
-			"time":          true,
+			"context":               true,
+			"internal/fuzz":         true,
+			"internal/runtime/maps": true,
+			"reflect":               true,
+			"runtime":               true,
+			"sync":                  true,
+			"sync/atomic":           true,
+			"syscall":               true,
+			"testing":               true,
+			"time":                  true,
 		}
 		for _, p := range load.TestPackageList(ctx, pkgOpts, pkgs) {
 			if !skipInstrumentation[p.ImportPath] {

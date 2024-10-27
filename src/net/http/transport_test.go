@@ -36,6 +36,7 @@ import (
 	"os"
 	"reflect"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -2585,8 +2586,8 @@ func runCancelTestTransport(t *testing.T, mode testMode, f func(t *testing.T, te
 
 // runCancelTestChannel uses Request.Cancel.
 func runCancelTestChannel(t *testing.T, mode testMode, f func(t *testing.T, test cancelTest)) {
-	var cancelOnce sync.Once
 	cancelc := make(chan struct{})
+	cancelOnce := sync.OnceFunc(func() { close(cancelc) })
 	f(t, cancelTest{
 		mode: mode,
 		newReq: func(req *Request) *Request {
@@ -2594,9 +2595,7 @@ func runCancelTestChannel(t *testing.T, mode testMode, f func(t *testing.T, test
 			return req
 		},
 		cancel: func(tr *Transport, req *Request) {
-			cancelOnce.Do(func() {
-				close(cancelc)
-			})
+			cancelOnce()
 		},
 		checkErr: func(when string, err error) {
 			if !errors.Is(err, ExportErrRequestCanceled) && !errors.Is(err, ExportErrRequestCanceledConn) {
@@ -3259,29 +3258,67 @@ func testTransportIgnore1xxResponses(t *testing.T, mode testMode) {
 	}
 }
 
-func TestTransportLimits1xxResponses(t *testing.T) {
-	run(t, testTransportLimits1xxResponses, []testMode{http1Mode})
-}
+func TestTransportLimits1xxResponses(t *testing.T) { run(t, testTransportLimits1xxResponses) }
 func testTransportLimits1xxResponses(t *testing.T, mode testMode) {
 	cst := newClientServerTest(t, mode, HandlerFunc(func(w ResponseWriter, r *Request) {
-		conn, buf, _ := w.(Hijacker).Hijack()
+		w.Header().Add("X-Header", strings.Repeat("a", 100))
 		for i := 0; i < 10; i++ {
-			buf.Write([]byte("HTTP/1.1 123 OneTwoThree\r\n\r\n"))
+			w.WriteHeader(123)
 		}
-		buf.Write([]byte("HTTP/1.1 204 No Content\r\n\r\n"))
-		buf.Flush()
-		conn.Close()
+		w.WriteHeader(204)
 	}))
 	cst.tr.DisableKeepAlives = true // prevent log spam; our test server is hanging up anyway
+	cst.tr.MaxResponseHeaderBytes = 1000
 
 	res, err := cst.c.Get(cst.ts.URL)
-	if res != nil {
-		defer res.Body.Close()
+	if err == nil {
+		res.Body.Close()
+		t.Fatalf("RoundTrip succeeded; want error")
 	}
-	got := fmt.Sprint(err)
-	wantSub := "too many 1xx informational responses"
-	if !strings.Contains(got, wantSub) {
-		t.Errorf("Get error = %v; want substring %q", err, wantSub)
+	for _, want := range []string{
+		"response headers exceeded",
+		"too many 1xx",
+	} {
+		if strings.Contains(err.Error(), want) {
+			return
+		}
+	}
+	t.Errorf(`got error %q; want "response headers exceeded" or "too many 1xx"`, err)
+}
+
+func TestTransportDoesNotLimitDelivered1xxResponses(t *testing.T) {
+	run(t, testTransportDoesNotLimitDelivered1xxResponses)
+}
+func testTransportDoesNotLimitDelivered1xxResponses(t *testing.T, mode testMode) {
+	if mode == http2Mode {
+		t.Skip("skip until x/net/http2 updated")
+	}
+	const num1xx = 10
+	cst := newClientServerTest(t, mode, HandlerFunc(func(w ResponseWriter, r *Request) {
+		w.Header().Add("X-Header", strings.Repeat("a", 100))
+		for i := 0; i < 10; i++ {
+			w.WriteHeader(123)
+		}
+		w.WriteHeader(204)
+	}))
+	cst.tr.DisableKeepAlives = true // prevent log spam; our test server is hanging up anyway
+	cst.tr.MaxResponseHeaderBytes = 1000
+
+	got1xx := 0
+	ctx := httptrace.WithClientTrace(context.Background(), &httptrace.ClientTrace{
+		Got1xxResponse: func(code int, header textproto.MIMEHeader) error {
+			got1xx++
+			return nil
+		},
+	})
+	req, _ := NewRequestWithContext(ctx, "GET", cst.ts.URL, nil)
+	res, err := cst.c.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if got1xx != num1xx {
+		t.Errorf("Got %v 1xx responses, want %x", got1xx, num1xx)
 	}
 }
 
@@ -4453,7 +4490,7 @@ func TestTransportFlushesBodyChunks(t *testing.T) {
 		"5\r\nnum2\n\r\n",
 		"0\r\n\r\n",
 	}
-	if !reflect.DeepEqual(lw.writes, want) {
+	if !slices.Equal(lw.writes, want) {
 		t.Errorf("Writes differed.\n Got: %q\nWant: %q\n", lw.writes, want)
 	}
 }
@@ -5113,20 +5150,16 @@ func testTransportEventTraceTLSVerify(t *testing.T, mode testMode) {
 	}
 }
 
-var (
-	isDNSHijackedOnce sync.Once
-	isDNSHijacked     bool
-)
+var isDNSHijacked = sync.OnceValue(func() bool {
+	addrs, _ := net.LookupHost("dns-should-not-resolve.golang")
+	return len(addrs) != 0
+})
 
 func skipIfDNSHijacked(t *testing.T) {
 	// Skip this test if the user is using a shady/ISP
 	// DNS server hijacking queries.
 	// See issues 16732, 16716.
-	isDNSHijackedOnce.Do(func() {
-		addrs, _ := net.LookupHost("dns-should-not-resolve.golang")
-		isDNSHijacked = len(addrs) != 0
-	})
-	if isDNSHijacked {
+	if isDNSHijacked() {
 		t.Skip("skipping; test requires non-hijacking DNS server")
 	}
 }
@@ -5284,7 +5317,7 @@ func testTransportMaxIdleConns(t *testing.T, mode testMode) {
 		"|http|host-2.dns-is-faked.golang:" + port,
 		"|http|host-3.dns-is-faked.golang:" + port,
 	}
-	if got := tr.IdleConnKeysForTesting(); !reflect.DeepEqual(got, want) {
+	if got := tr.IdleConnKeysForTesting(); !slices.Equal(got, want) {
 		t.Fatalf("idle conn keys mismatch.\n got: %q\nwant: %q\n", got, want)
 	}
 
@@ -5296,7 +5329,7 @@ func testTransportMaxIdleConns(t *testing.T, mode testMode) {
 		"|http|host-3.dns-is-faked.golang:" + port,
 		"|http|host-4.dns-is-faked.golang:" + port,
 	}
-	if got := tr.IdleConnKeysForTesting(); !reflect.DeepEqual(got, want) {
+	if got := tr.IdleConnKeysForTesting(); !slices.Equal(got, want) {
 		t.Fatalf("idle conn keys mismatch after 5th host.\n got: %q\nwant: %q\n", got, want)
 	}
 }
@@ -5462,7 +5495,7 @@ func TestTransportReturnsPeekError(t *testing.T) {
 	errValue := errors.New("specific error value")
 
 	wrote := make(chan struct{})
-	var wroteOnce sync.Once
+	wroteOnce := sync.OnceFunc(func() { close(wrote) })
 
 	tr := &Transport{
 		Dial: func(network, addr string) (net.Conn, error) {
@@ -5472,7 +5505,7 @@ func TestTransportReturnsPeekError(t *testing.T) {
 					return 0, errValue
 				},
 				write: func(p []byte) (int, error) {
-					wroteOnce.Do(func() { close(wrote) })
+					wroteOnce()
 					return len(p), nil
 				},
 			}
@@ -6327,6 +6360,7 @@ func TestTransportClone(t *testing.T) {
 		GetProxyConnectHeader:  func(context.Context, *url.URL, string) (Header, error) { return nil, nil },
 		MaxResponseHeaderBytes: 1,
 		ForceAttemptHTTP2:      true,
+		HTTP2:                  &HTTP2Config{MaxConcurrentStreams: 1},
 		TLSNextProto: map[string]func(authority string, c *tls.Conn) RoundTripper{
 			"foo": func(authority string, c *tls.Conn) RoundTripper { panic("") },
 		},

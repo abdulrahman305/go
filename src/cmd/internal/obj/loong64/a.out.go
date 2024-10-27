@@ -204,32 +204,28 @@ const (
 	C_UCON // 32 bit signed, low 12 bits 0
 	C_ADD0CON
 	C_AND0CON
-	C_ADDCON // -0x800 <= v < 0
-	C_ANDCON // 0 < v <= 0xFFF
-	C_LCON   // other 32
-	C_DCON   // other 64 (could subdivide further)
-	C_SACON  // $n(REG) where n <= int12
-	C_SECON
-	C_LACON // $n(REG) where int12 < n <= int32
-	C_LECON
-	C_DACON // $n(REG) where int32 < n
-	C_STCON // $tlsvar
-	C_SBRA
-	C_LBRA
+	C_ADDCON  // -0x800 <= v < 0
+	C_ANDCON  // 0 < v <= 0xFFF
+	C_LCON    // other 32
+	C_DCON    // other 64 (could subdivide further)
+	C_SACON   // $n(REG) where n <= int12
+	C_LACON   // $n(REG) where int12 < n <= int32
+	C_DACON   // $n(REG) where int32 < n
+	C_EXTADDR // external symbol address
+	C_BRAN
 	C_SAUTO
 	C_LAUTO
-	C_SEXT
-	C_LEXT
 	C_ZOREG
 	C_SOREG
 	C_LOREG
-	C_GOK
+	C_ROFF // register offset
 	C_ADDR
 	C_TLS_LE
 	C_TLS_IE
 	C_GOTADDR
 	C_TEXTSIZE
 
+	C_GOK
 	C_NCLASS // must be the last
 )
 
@@ -303,9 +299,6 @@ const (
 	AMOVWD
 	AMOVWF
 
-	AMOVWL
-	AMOVWR
-
 	AMUL
 	AMULD
 	AMULF
@@ -360,8 +353,6 @@ const (
 
 	// 64-bit
 	AMOVV
-	AMOVVL
-	AMOVVR
 
 	ASLLV
 	ASRAV
@@ -393,6 +384,10 @@ const (
 	AMOVDV
 	AMOVVF
 	AMOVVD
+
+	// 2.2.1.8
+	AORN
+	AANDN
 
 	// 2.2.7. Atomic Memory Access Instructions
 	AAMSWAPB
@@ -444,10 +439,65 @@ const (
 	AAMMINDBWU
 	AAMMINDBVU
 
+	// 2.2.3.8
+	ABSTRINSW
+	ABSTRINSV
+
+	// 2.2.3.9
+	ABSTRPICKW
+	ABSTRPICKV
+
 	// 2.2.10. Other Miscellaneous Instructions
 	ARDTIMELW
 	ARDTIMEHW
 	ARDTIMED
+	ACPUCFG
+
+	// 3.2.1.3
+	AFMINF
+	AFMIND
+	AFMAXF
+	AFMAXD
+
+	// 3.2.1.7
+	AFCOPYSGF
+	AFCOPYSGD
+	AFSCALEBF
+	AFSCALEBD
+	AFLOGBF
+	AFLOGBD
+
+	// 3.2.1.8
+	AFCLASSF
+	AFCLASSD
+
+	// 3.2.3.2
+	AFFINTFW
+	AFFINTFV
+	AFFINTDW
+	AFFINTDV
+	AFTINTWF
+	AFTINTWD
+	AFTINTVF
+	AFTINTVD
+
+	// 3.2.3.3
+	AFTINTRPWF
+	AFTINTRPWD
+	AFTINTRPVF
+	AFTINTRPVD
+	AFTINTRMWF
+	AFTINTRMWD
+	AFTINTRMVF
+	AFTINTRMVD
+	AFTINTRZWF
+	AFTINTRZWD
+	AFTINTRZVF
+	AFTINTRZVD
+	AFTINTRNEWF
+	AFTINTRNEWD
+	AFTINTRNEVF
+	AFTINTRNEVD
 
 	ALAST
 

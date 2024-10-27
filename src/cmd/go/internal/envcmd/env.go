@@ -80,6 +80,7 @@ func MkEnv() []cfg.EnvVar {
 	env := []cfg.EnvVar{
 		{Name: "GO111MODULE", Value: cfg.Getenv("GO111MODULE")},
 		{Name: "GOARCH", Value: cfg.Goarch, Changed: cfg.Goarch != runtime.GOARCH},
+		{Name: "GOAUTH", Value: cfg.GOAUTH, Changed: cfg.GOAUTHChanged},
 		{Name: "GOBIN", Value: cfg.GOBIN},
 		{Name: "GOCACHE"},
 		{Name: "GOENV", Value: envFile, Changed: envFileChanged},
@@ -339,7 +340,7 @@ func runEnv(ctx context.Context, cmd *base.Command, args []string) {
 		// Show only the named vars.
 		if !*envChanged {
 			if *envJson {
-				var es []cfg.EnvVar
+				es := make([]cfg.EnvVar, 0, len(args))
 				for _, name := range args {
 					e := cfg.EnvVar{Name: name, Value: findEnv(env, name)}
 					es = append(es, e)
@@ -590,7 +591,7 @@ func getOrigEnv(key string) string {
 
 func checkEnvWrite(key, val string) error {
 	switch key {
-	case "GOEXE", "GOGCCFLAGS", "GOHOSTARCH", "GOHOSTOS", "GOMOD", "GOWORK", "GOTOOLDIR", "GOVERSION":
+	case "GOEXE", "GOGCCFLAGS", "GOHOSTARCH", "GOHOSTOS", "GOMOD", "GOWORK", "GOTOOLDIR", "GOVERSION", "GOTELEMETRY", "GOTELEMETRYDIR":
 		return fmt.Errorf("%s cannot be modified", key)
 	case "GOENV", "GODEBUG":
 		return fmt.Errorf("%s can only be set using the OS environment", key)

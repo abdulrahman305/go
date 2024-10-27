@@ -520,7 +520,14 @@ func Open(path string, openmode int, perm uint32) (int, error) {
 		return -1, EINVAL
 	}
 	dirFd, pathPtr, pathLen := preparePath(path)
+	return openat(dirFd, pathPtr, pathLen, openmode, perm)
+}
 
+func Openat(dirFd int, path string, openmode int, perm uint32) (int, error) {
+	return openat(int32(dirFd), stringPointer(path), size(len(path)), openmode, perm)
+}
+
+func openat(dirFd int32, pathPtr unsafe.Pointer, pathLen size, openmode int, perm uint32) (int, error) {
 	var oflags oflags
 	if (openmode & O_CREATE) != 0 {
 		oflags |= OFLAG_CREATE
@@ -542,6 +549,14 @@ func Open(path string, openmode int, perm uint32) (int, error) {
 		rights = fileRights
 	}
 
+	if (openmode & O_DIRECTORY) != 0 {
+		if openmode&(O_WRONLY|O_RDWR) != 0 {
+			return -1, EISDIR
+		}
+		oflags |= OFLAG_DIRECTORY
+		rights &= dirRights
+	}
+
 	var fdflags fdflags
 	if (openmode & O_APPEND) != 0 {
 		fdflags |= FDFLAG_APPEND
@@ -550,10 +565,15 @@ func Open(path string, openmode int, perm uint32) (int, error) {
 		fdflags |= FDFLAG_SYNC
 	}
 
+	var lflags lookupflags
+	if openmode&O_NOFOLLOW == 0 {
+		lflags = LOOKUP_SYMLINK_FOLLOW
+	}
+
 	var fd int32
 	errno := path_open(
 		dirFd,
-		LOOKUP_SYMLINK_FOLLOW,
+		lflags,
 		pathPtr,
 		pathLen,
 		oflags,

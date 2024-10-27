@@ -20,6 +20,7 @@ import (
 	"internal/godebug"
 	"io"
 	"log"
+	"maps"
 	"net"
 	"net/http/httptrace"
 	"net/http/internal/ascii"
@@ -293,6 +294,12 @@ type Transport struct {
 	// To use a custom dialer or TLS config and still attempt HTTP/2
 	// upgrades, set this to true.
 	ForceAttemptHTTP2 bool
+
+	// HTTP2 configures HTTP/2 connections.
+	//
+	// This field does not yet have any effect.
+	// See https://go.dev/issue/67813.
+	HTTP2 *HTTP2Config
 }
 
 func (t *Transport) writeBufferSize() int {
@@ -338,10 +345,14 @@ func (t *Transport) Clone() *Transport {
 	if t.TLSClientConfig != nil {
 		t2.TLSClientConfig = t.TLSClientConfig.Clone()
 	}
+	if t.HTTP2 != nil {
+		t2.HTTP2 = &HTTP2Config{}
+		*t2.HTTP2 = *t.HTTP2
+	}
 	if !t.tlsNextProtoWasNil {
-		npm := map[string]func(authority string, c *tls.Conn) RoundTripper{}
-		for k, v := range t.TLSNextProto {
-			npm[k] = v
+		npm := maps.Clone(t.TLSNextProto)
+		if npm == nil {
+			npm = make(map[string]func(authority string, c *tls.Conn) RoundTripper)
 		}
 		t2.TLSNextProto = npm
 	}
@@ -820,9 +831,9 @@ func (t *Transport) RegisterProtocol(scheme string, rt RoundTripper) {
 	if _, exists := oldMap[scheme]; exists {
 		panic("protocol " + scheme + " already registered")
 	}
-	newMap := make(map[string]RoundTripper)
-	for k, v := range oldMap {
-		newMap[k] = v
+	newMap := maps.Clone(oldMap)
+	if newMap == nil {
+		newMap = make(map[string]RoundTripper)
 	}
 	newMap[scheme] = rt
 	t.altProto.Store(newMap)
@@ -2387,8 +2398,6 @@ func (pc *persistConn) readResponse(rc requestAndChan, trace *httptrace.ClientTr
 			trace.GotFirstResponseByte()
 		}
 	}
-	num1xx := 0               // number of informational 1xx headers received
-	const max1xxResponses = 5 // arbitrary bound on number of informational responses
 
 	continueCh := rc.continueCh
 	for {
@@ -2408,15 +2417,18 @@ func (pc *persistConn) readResponse(rc requestAndChan, trace *httptrace.ClientTr
 		// treat 101 as a terminal status, see issue 26161
 		is1xxNonTerminal := is1xx && resCode != StatusSwitchingProtocols
 		if is1xxNonTerminal {
-			num1xx++
-			if num1xx > max1xxResponses {
-				return nil, errors.New("net/http: too many 1xx informational responses")
-			}
-			pc.readLimit = pc.maxHeaderResponseSize() // reset the limit
 			if trace != nil && trace.Got1xxResponse != nil {
 				if err := trace.Got1xxResponse(resCode, textproto.MIMEHeader(resp.Header)); err != nil {
 					return nil, err
 				}
+				// If the 1xx response was delivered to the user,
+				// then they're responsible for limiting the number of
+				// responses. Reset the header limit.
+				//
+				// If the user didn't examine the 1xx response, then we
+				// limit the size of all headers (including both 1xx
+				// and the final response) to maxHeaderResponseSize.
+				pc.readLimit = pc.maxHeaderResponseSize() // reset the limit
 			}
 			continue
 		}

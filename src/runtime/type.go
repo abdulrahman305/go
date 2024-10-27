@@ -8,6 +8,7 @@ package runtime
 
 import (
 	"internal/abi"
+	"internal/goexperiment"
 	"unsafe"
 )
 
@@ -106,15 +107,6 @@ func reflectOffsUnlock() {
 	unlock(&reflectOffs.lock)
 }
 
-// resolveNameOff should be an internal detail,
-// but widely used packages access it using linkname.
-// Notable members of the hall of shame include:
-//   - github.com/cloudwego/frugal
-//
-// Do not remove or change the type signature.
-// See go.dev/issue/67401.
-//
-//go:linkname resolveNameOff
 func resolveNameOff(ptrInModule unsafe.Pointer, off nameOff) name {
 	if off == 0 {
 		return name{}
@@ -149,15 +141,6 @@ func (t rtype) nameOff(off nameOff) name {
 	return resolveNameOff(unsafe.Pointer(t.Type), off)
 }
 
-// resolveTypeOff should be an internal detail,
-// but widely used packages access it using linkname.
-// Notable members of the hall of shame include:
-//   - github.com/cloudwego/frugal
-//
-// Do not remove or change the type signature.
-// See go.dev/issue/67401.
-//
-//go:linkname resolveTypeOff
 func resolveTypeOff(ptrInModule unsafe.Pointer, off typeOff) *_type {
 	if off == 0 || off == -1 {
 		// -1 is the sentinel value for unreachable code.
@@ -234,8 +217,6 @@ func (t rtype) textOff(off textOff) unsafe.Pointer {
 type uncommontype = abi.UncommonType
 
 type interfacetype = abi.InterfaceType
-
-type maptype = abi.MapType
 
 type arraytype = abi.ArrayType
 
@@ -439,8 +420,13 @@ func typesEqual(t, v *_type, seen map[_typePair]struct{}) bool {
 		}
 		return true
 	case abi.Map:
-		mt := (*maptype)(unsafe.Pointer(t))
-		mv := (*maptype)(unsafe.Pointer(v))
+		if goexperiment.SwissMap {
+			mt := (*abi.SwissMapType)(unsafe.Pointer(t))
+			mv := (*abi.SwissMapType)(unsafe.Pointer(v))
+			return typesEqual(mt.Key, mv.Key, seen) && typesEqual(mt.Elem, mv.Elem, seen)
+		}
+		mt := (*abi.OldMapType)(unsafe.Pointer(t))
+		mv := (*abi.OldMapType)(unsafe.Pointer(v))
 		return typesEqual(mt.Key, mv.Key, seen) && typesEqual(mt.Elem, mv.Elem, seen)
 	case abi.Pointer:
 		pt := (*ptrtype)(unsafe.Pointer(t))

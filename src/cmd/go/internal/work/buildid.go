@@ -18,6 +18,7 @@ import (
 	"cmd/go/internal/fsys"
 	"cmd/go/internal/str"
 	"cmd/internal/buildid"
+	"cmd/internal/pathcache"
 	"cmd/internal/quoted"
 	"cmd/internal/telemetry/counter"
 )
@@ -292,7 +293,7 @@ func (b *Builder) gccToolID(name, language string) (id, exe string, err error) {
 		}
 		exe = fields[0]
 		if !strings.ContainsAny(exe, `/\`) {
-			if lp, err := cfg.LookPath(exe); err == nil {
+			if lp, err := pathcache.LookPath(exe); err == nil {
 				exe = lp
 			}
 		}
@@ -409,8 +410,8 @@ var (
 	counterCacheHit  = counter.New("go/buildcache/hit")
 	counterCacheMiss = counter.New("go/buildcache/miss")
 
-	onceIncStdlibRecompiled sync.Once
 	stdlibRecompiled        = counter.New("go/buildcache/stdlib-recompiled")
+	stdlibRecompiledIncOnce = sync.OnceFunc(stdlibRecompiled.Inc)
 )
 
 // useCache tries to satisfy the action a, which has action ID actionHash,
@@ -466,7 +467,7 @@ func (b *Builder) useCache(a *Action, actionHash cache.ActionID, target string, 
 			counterCacheHit.Inc()
 		} else {
 			if a.Package != nil && a.Package.Standard {
-				onceIncStdlibRecompiled.Do(stdlibRecompiled.Inc)
+				stdlibRecompiledIncOnce()
 			}
 			counterCacheMiss.Inc()
 		}

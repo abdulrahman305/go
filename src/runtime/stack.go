@@ -10,7 +10,7 @@ import (
 	"internal/goarch"
 	"internal/goos"
 	"internal/runtime/atomic"
-	"runtime/internal/sys"
+	"internal/runtime/sys"
 	"unsafe"
 )
 
@@ -416,7 +416,7 @@ func stackalloc(n uint32) stack {
 	}
 
 	if traceAllocFreeEnabled() {
-		trace := traceTryAcquire()
+		trace := traceAcquire()
 		if trace.ok() {
 			trace.GoroutineStackAlloc(uintptr(v), uintptr(n))
 			traceRelease(trace)
@@ -466,7 +466,7 @@ func stackfree(stk stack) {
 		return
 	}
 	if traceAllocFreeEnabled() {
-		trace := traceTryAcquire()
+		trace := traceAcquire()
 		if trace.ok() {
 			trace.GoroutineStackFree(uintptr(v))
 			traceRelease(trace)

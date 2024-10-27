@@ -10,7 +10,7 @@ import (
 	"internal/abi"
 	"internal/goarch"
 	"internal/runtime/atomic"
-	"runtime/internal/sys"
+	"internal/runtime/sys"
 	"unsafe"
 )
 
@@ -1693,6 +1693,10 @@ func gcDumpObject(label string, obj, off uintptr) {
 func gcmarknewobject(span *mspan, obj uintptr) {
 	if useCheckmark { // The world should be stopped so this should not happen.
 		throw("gcmarknewobject called while doing checkmark")
+	}
+	if gcphase == _GCmarktermination {
+		// Check this here instead of on the hot path.
+		throw("mallocgc called with gcphase == _GCmarktermination")
 	}
 
 	// Mark object.

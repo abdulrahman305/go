@@ -6,6 +6,8 @@ package poll
 
 import "syscall"
 
+//go:cgo_ldflag "-lsendfile"
+
 // Not strictly needed, but very helpful for debugging, see issue #10221.
 //
 //go:cgo_import_dynamic _ _ "libsendfile.so"
@@ -13,7 +15,10 @@ import "syscall"
 
 // maxSendfileSize is the largest chunk size we ask the kernel to copy
 // at a time.
-const maxSendfileSize int = 4 << 20
+// sendfile(2)s on SunOS derivatives don't have a limit on the size of
+// data to copy at a time, we pick the typical SSIZE_MAX on 32-bit systems,
+// which ought to be sufficient for all practical purposes.
+const maxSendfileSize int = 1<<31 - 1
 
 // SendFile wraps the sendfile system call.
 func SendFile(dstFD *FD, src int, pos, remain int64) (written int64, err error, handled bool) {
@@ -37,8 +42,13 @@ func SendFile(dstFD *FD, src int, pos, remain int64) (written int64, err error, 
 		}
 		pos1 := pos
 		n, err = syscall.Sendfile(dst, src, &pos1, n)
-		if err == syscall.EAGAIN || err == syscall.EINTR {
-			// partial write may have occurred
+		if err == syscall.EAGAIN || err == syscall.EINTR || err == syscall.EINVAL {
+			// Partial write or other quirks may have occurred.
+			//
+			// For EINVAL, this is another quirk on SunOS: sendfile() claims to support
+			// out_fd as a regular file but returns EINVAL when the out_fd is not a
+			// socket of SOCK_STREAM, while it actually sends out data anyway and updates
+			// the file offset.
 			n = int(pos1 - pos)
 		}
 		if n > 0 {
@@ -60,6 +70,9 @@ func SendFile(dstFD *FD, src int, pos, remain int64) (written int64, err error, 
 		if err = dstFD.pd.waitWrite(dstFD.isFile); err != nil {
 			break
 		}
+	}
+	if err == syscall.EAGAIN {
+		err = nil
 	}
 	handled = written != 0 || (err != syscall.ENOSYS && err != syscall.EINVAL)
 	return

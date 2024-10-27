@@ -33,7 +33,7 @@ package obj
 
 import (
 	"cmd/internal/goobj"
-	"cmd/internal/notsha256"
+	"cmd/internal/hash"
 	"cmd/internal/objabi"
 	"encoding/base64"
 	"encoding/binary"
@@ -207,7 +207,7 @@ func (ctxt *Link) Int128Sym(hi, lo int64) *LSym {
 
 // GCLocalsSym generates a content-addressable sym containing data.
 func (ctxt *Link) GCLocalsSym(data []byte) *LSym {
-	sum := notsha256.Sum256(data)
+	sum := hash.Sum16(data)
 	str := base64.StdEncoding.EncodeToString(sum[:16])
 	return ctxt.LookupInit(fmt.Sprintf("gclocals·%s", str), func(lsym *LSym) {
 		lsym.P = data
@@ -458,7 +458,13 @@ func (ctxt *Link) traverseFuncAux(flag traverseFlag, fsym *LSym, fn func(parent 
 		}
 	}
 
-	auxsyms := []*LSym{fninfo.dwarfRangesSym, fninfo.dwarfLocSym, fninfo.dwarfDebugLinesSym, fninfo.dwarfInfoSym, fninfo.WasmImportSym, fninfo.sehUnwindInfoSym}
+	auxsyms := []*LSym{fninfo.dwarfRangesSym, fninfo.dwarfLocSym, fninfo.dwarfDebugLinesSym, fninfo.dwarfInfoSym, fninfo.sehUnwindInfoSym}
+	if wi := fninfo.WasmImport; wi != nil {
+		auxsyms = append(auxsyms, wi.AuxSym)
+	}
+	if we := fninfo.WasmExport; we != nil {
+		auxsyms = append(auxsyms, we.AuxSym)
+	}
 	for _, s := range auxsyms {
 		if s == nil || s.Size == 0 {
 			continue

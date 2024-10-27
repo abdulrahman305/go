@@ -30,14 +30,11 @@ const (
 type Table [256]uint64
 
 var (
-	slicing8TablesBuildOnce sync.Once
-	slicing8TableISO        *[8]Table
-	slicing8TableECMA       *[8]Table
+	slicing8TableISO  *[8]Table
+	slicing8TableECMA *[8]Table
 )
 
-func buildSlicing8TablesOnce() {
-	slicing8TablesBuildOnce.Do(buildSlicing8Tables)
-}
+var buildSlicing8TablesOnce = sync.OnceFunc(buildSlicing8Tables)
 
 func buildSlicing8Tables() {
 	slicing8TableISO = makeSlicingBy8Table(makeTable(ISO))
@@ -111,12 +108,15 @@ const (
 	marshaledSize = len(magic) + 8 + 8
 )
 
-func (d *digest) MarshalBinary() ([]byte, error) {
-	b := make([]byte, 0, marshaledSize)
+func (d *digest) AppendBinary(b []byte) ([]byte, error) {
 	b = append(b, magic...)
 	b = byteorder.BeAppendUint64(b, tableSum(d.tab))
 	b = byteorder.BeAppendUint64(b, d.crc)
 	return b, nil
+}
+
+func (d *digest) MarshalBinary() ([]byte, error) {
+	return d.AppendBinary(make([]byte, 0, marshaledSize))
 }
 
 func (d *digest) UnmarshalBinary(b []byte) error {

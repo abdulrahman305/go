@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	"maps"
 	"math"
 	"math/big"
 	"net"
@@ -59,6 +60,21 @@ type SS string
 
 func (*SS) UnmarshalJSON(data []byte) error {
 	return &UnmarshalTypeError{Value: "number", Type: reflect.TypeFor[SS]()}
+}
+
+type TAlias T
+
+func (tt *TAlias) UnmarshalJSON(data []byte) error {
+	t := T{}
+	if err := Unmarshal(data, &t); err != nil {
+		return err
+	}
+	*tt = TAlias(t)
+	return nil
+}
+
+type TOuter struct {
+	T TAlias
 }
 
 // ifaceNumAsFloat64/ifaceNumAsNumber are used to test unmarshaling with and
@@ -427,6 +443,7 @@ var unmarshalTests = []struct {
 	{CaseName: Name(""), in: `{"x": 1}`, ptr: new(tx), out: tx{}},
 	{CaseName: Name(""), in: `{"x": 1}`, ptr: new(tx), err: fmt.Errorf("json: unknown field \"x\""), disallowUnknownFields: true},
 	{CaseName: Name(""), in: `{"S": 23}`, ptr: new(W), out: W{}, err: &UnmarshalTypeError{"number", reflect.TypeFor[SS](), 0, "W", "S"}},
+	{CaseName: Name(""), in: `{"T": {"X": 23}}`, ptr: new(TOuter), out: TOuter{}, err: &UnmarshalTypeError{"number", reflect.TypeFor[string](), 0, "TOuter", "T.X"}},
 	{CaseName: Name(""), in: `{"F1":1,"F2":2,"F3":3}`, ptr: new(V), out: V{F1: float64(1), F2: int32(2), F3: Number("3")}},
 	{CaseName: Name(""), in: `{"F1":1,"F2":2,"F3":3}`, ptr: new(V), out: V{F1: Number("1"), F2: int32(2), F3: Number("3")}, useNumber: true},
 	{CaseName: Name(""), in: `{"k1":1,"k2":"s","k3":[1,2.0,3e-3],"k4":{"kk1":"s","kk2":2}}`, ptr: new(any), out: ifaceNumAsFloat64},
@@ -878,6 +895,19 @@ var unmarshalTests = []struct {
 			Field:  "V.F2",
 			Type:   reflect.TypeFor[int32](),
 			Offset: 30,
+		},
+	},
+
+	{
+		CaseName: Name(""),
+		in:       `{"Level1a": "hello"}`,
+		ptr:      new(Top),
+		err: &UnmarshalTypeError{
+			Value:  "string",
+			Struct: "Top",
+			Field:  "Embed0a.Level1a",
+			Type:   reflect.TypeFor[int](),
+			Offset: 10,
 		},
 	},
 
@@ -1979,7 +2009,7 @@ func TestStringKind(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Unmarshal error: %v", err)
 	}
-	if !reflect.DeepEqual(got, want) {
+	if !maps.Equal(got, want) {
 		t.Fatalf("Marshal/Unmarshal mismatch:\n\tgot:  %v\n\twant: %v", got, want)
 	}
 }
@@ -2533,7 +2563,7 @@ func TestUnmarshalRescanLiteralMangledUnquote(t *testing.T) {
 		t.Fatalf("Unmarshal error: %v", err)
 	}
 	want := map[textUnmarshalerString]string{"foo": "", `"`: ""}
-	if !reflect.DeepEqual(got, want) {
+	if !maps.Equal(got, want) {
 		t.Errorf("Marshal/Unmarshal roundtrip:\n\tgot:  %q\n\twant: %q", gotT, wantT)
 	}
 }

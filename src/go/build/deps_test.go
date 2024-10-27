@@ -16,7 +16,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -32,7 +31,7 @@ import (
 //
 // "a < b" means package b can import package a.
 //
-// See `go doc internal/dag' for the full syntax.
+// See `go doc internal/dag` for the full syntax.
 //
 // All-caps names are pseudo-names for specific points
 // in the dependency lattice.
@@ -58,6 +57,7 @@ var depsRules = `
 	  internal/nettrace,
 	  internal/platform,
 	  internal/profilerecord,
+	  internal/syslist,
 	  internal/trace/traceviewer/format,
 	  log/internal,
 	  math/bits,
@@ -83,11 +83,12 @@ var depsRules = `
 	< internal/stringslite
 	< internal/itoa
 	< internal/unsafeheader
-	< runtime/internal/sys
+	< internal/runtime/sys
 	< internal/runtime/syscall
 	< internal/runtime/atomic
 	< internal/runtime/exithook
-	< runtime/internal/math
+	< internal/runtime/maps
+	< internal/runtime/math
 	< runtime
 	< sync/atomic
 	< internal/race
@@ -337,7 +338,7 @@ var depsRules = `
 	go/doc/comment, go/parser, internal/lazyregexp, text/template
 	< go/doc;
 
-	go/build/constraint, go/doc, go/parser, internal/buildcfg, internal/goroot, internal/goversion, internal/platform
+	go/build/constraint, go/doc, go/parser, internal/buildcfg, internal/goroot, internal/goversion, internal/platform, internal/syslist
 	< go/build;
 
 	# databases
@@ -441,11 +442,26 @@ var depsRules = `
 	NET, log
 	< net/mail;
 
+	NONE < crypto/internal/impl;
+
+	# FIPS is the FIPS 140 module.
+	# It must not depend on external crypto packages.
+	# Internal packages imported by FIPS might need to retain
+	# backwards compatibility with older versions of the module.
+	STR, crypto/internal/impl
+	< crypto/internal/fips
+	< crypto/internal/fips/subtle
+	< crypto/internal/fips/sha256
+	< crypto/internal/fips/sha512
+	< crypto/internal/fips/hmac
+	< FIPS;
+
 	NONE < crypto/internal/boring/sig, crypto/internal/boring/syso;
 	sync/atomic < crypto/internal/boring/bcache, crypto/internal/boring/fipstls;
 	crypto/internal/boring/sig, crypto/internal/boring/fipstls < crypto/tls/fipsonly;
 
 	# CRYPTO is core crypto algorithms - no cgo, fmt, net.
+	FIPS,
 	crypto/internal/boring/sig,
 	crypto/internal/boring/syso,
 	golang.org/x/sys/cpu,
@@ -460,7 +476,7 @@ var depsRules = `
 	< crypto/internal/boring
 	< crypto/boring;
 
-	crypto/internal/alias
+	crypto/internal/alias, math/rand/v2
 	< crypto/internal/randutil
 	< crypto/internal/nistec/fiat
 	< crypto/internal/nistec
@@ -642,8 +658,11 @@ var depsRules = `
 	FMT
 	< internal/txtar;
 
-	CRYPTO-MATH, testing
+	CRYPTO-MATH, testing, internal/testenv
 	< crypto/internal/cryptotest;
+
+	CGO, FMT
+	< crypto/rand/internal/seccomp;
 
 	# v2 execution trace parser.
 	FMT
@@ -682,7 +701,7 @@ var depsRules = `
 	< internal/trace/traceviewer;
 
 	# Coverage.
-	FMT, crypto/md5, encoding/binary, regexp, sort, text/tabwriter,
+	FMT, hash/fnv, encoding/binary, regexp, sort, text/tabwriter,
 	internal/coverage, internal/coverage/uleb128
 	< internal/coverage/cmerge,
 	  internal/coverage/pods,
@@ -750,11 +769,7 @@ func listStdPkgs(goroot string) ([]string, error) {
 }
 
 func TestDependencies(t *testing.T) {
-	if !testenv.HasSrc() {
-		// Tests run in a limited file system and we do not
-		// provide access to every source file.
-		t.Skipf("skipping on %s/%s, missing full GOROOT", runtime.GOOS, runtime.GOARCH)
-	}
+	testenv.MustHaveSource(t)
 
 	ctxt := Default
 	all, err := listStdPkgs(ctxt.GOROOT)
@@ -858,9 +873,7 @@ func depsPolicy(t *testing.T) *dag.Graph {
 // TestStdlibLowercase tests that all standard library package names are
 // lowercase. See Issue 40065.
 func TestStdlibLowercase(t *testing.T) {
-	if !testenv.HasSrc() {
-		t.Skipf("skipping on %s/%s, missing full GOROOT", runtime.GOOS, runtime.GOARCH)
-	}
+	testenv.MustHaveSource(t)
 
 	ctxt := Default
 	all, err := listStdPkgs(ctxt.GOROOT)

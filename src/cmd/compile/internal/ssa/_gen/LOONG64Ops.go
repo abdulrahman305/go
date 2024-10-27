@@ -142,8 +142,10 @@ func init() {
 		gp11sp    = regInfo{inputs: []regMask{gpspg}, outputs: []regMask{gp}}
 		gp21      = regInfo{inputs: []regMask{gpg, gpg}, outputs: []regMask{gp}}
 		gpload    = regInfo{inputs: []regMask{gpspsbg}, outputs: []regMask{gp}}
+		gp2load   = regInfo{inputs: []regMask{gpspsbg, gpg}, outputs: []regMask{gp}}
 		gpstore   = regInfo{inputs: []regMask{gpspsbg, gpg}}
 		gpstore0  = regInfo{inputs: []regMask{gpspsbg}}
+		gpstore2  = regInfo{inputs: []regMask{gpspsbg, gpg, gpg}}
 		gpxchg    = regInfo{inputs: []regMask{gpspsbg, gpg}, outputs: []regMask{gp}}
 		gpcas     = regInfo{inputs: []regMask{gpspsbg, gpg, gpg}, outputs: []regMask{gp}}
 		fp01      = regInfo{inputs: nil, outputs: []regMask{fp}}
@@ -151,7 +153,11 @@ func init() {
 		fp21      = regInfo{inputs: []regMask{fp, fp}, outputs: []regMask{fp}}
 		fp2flags  = regInfo{inputs: []regMask{fp, fp}}
 		fpload    = regInfo{inputs: []regMask{gpspsbg}, outputs: []regMask{fp}}
+		fp2load   = regInfo{inputs: []regMask{gpspsbg, gpg}, outputs: []regMask{fp}}
 		fpstore   = regInfo{inputs: []regMask{gpspsbg, fp}}
+		fpstore2  = regInfo{inputs: []regMask{gpspsbg, gpg, fp}}
+		fpgp      = regInfo{inputs: []regMask{fp}, outputs: []regMask{gp}}
+		gpfp      = regInfo{inputs: []regMask{gp}, outputs: []regMask{fp}}
 		readflags = regInfo{inputs: nil, outputs: []regMask{gp}}
 	)
 	ops := []opData{
@@ -193,8 +199,16 @@ func init() {
 		{name: "SQRTD", argLength: 1, reg: fp11, asm: "SQRTD"}, // sqrt(arg0), float64
 		{name: "SQRTF", argLength: 1, reg: fp11, asm: "SQRTF"}, // sqrt(arg0), float32
 
+		{name: "FMINF", argLength: 2, reg: fp21, resultNotInArgs: true, asm: "FMINF", commutative: true, typ: "Float32"}, // min(arg0, arg1), float32
+		{name: "FMIND", argLength: 2, reg: fp21, resultNotInArgs: true, asm: "FMIND", commutative: true, typ: "Float64"}, // min(arg0, arg1), float64
+		{name: "FMAXF", argLength: 2, reg: fp21, resultNotInArgs: true, asm: "FMAXF", commutative: true, typ: "Float32"}, // max(arg0, arg1), float32
+		{name: "FMAXD", argLength: 2, reg: fp21, resultNotInArgs: true, asm: "FMAXD", commutative: true, typ: "Float64"}, // max(arg0, arg1), float64
+
 		{name: "MASKEQZ", argLength: 2, reg: gp21, asm: "MASKEQZ"}, // returns 0 if arg1 == 0, otherwise returns arg0
 		{name: "MASKNEZ", argLength: 2, reg: gp21, asm: "MASKNEZ"}, // returns 0 if arg1 != 0, otherwise returns arg0
+
+		{name: "ABSD", argLength: 1, reg: fp11, asm: "ABSD"},         // abs(arg0), float64
+		{name: "FCOPYSGD", argLength: 2, reg: fp21, asm: "FCOPYSGD"}, // float64
 
 		// shifts
 		{name: "SLLV", argLength: 2, reg: gp21, asm: "SLLV"},                      // arg0 << arg1, shift amount is mod 64
@@ -221,6 +235,12 @@ func init() {
 		{name: "CMPGTF", argLength: 2, reg: fp2flags, asm: "CMPGTF", typ: "Flags"}, // flags=true if arg0 > arg1, float32
 		{name: "CMPGTD", argLength: 2, reg: fp2flags, asm: "CMPGTD", typ: "Flags"}, // flags=true if arg0 > arg1, float64
 
+		// bitfield ops
+		// for bstrpick.w msbw is auxInt>>5, lsbw is auxInt&0x1f
+		// for bstrpick.d msbd is auxInt>>6, lsbd is auxInt&0x3f
+		{name: "BSTRPICKW", argLength: 1, reg: gp11, asm: "BSTRPICKW", aux: "Int64"},
+		{name: "BSTRPICKV", argLength: 1, reg: gp11, asm: "BSTRPICKV", aux: "Int64"},
+
 		// moves
 		{name: "MOVVconst", argLength: 0, reg: gp01, aux: "Int64", asm: "MOVV", typ: "UInt64", rematerializeable: true},    // auxint
 		{name: "MOVFconst", argLength: 0, reg: fp01, aux: "Float64", asm: "MOVF", typ: "Float32", rematerializeable: true}, // auxint as 64-bit float, convert to 32-bit float
@@ -238,6 +258,17 @@ func init() {
 		{name: "MOVFload", argLength: 2, reg: fpload, aux: "SymOff", asm: "MOVF", typ: "Float32", faultOnNilArg0: true, symEffect: "Read"},  // load from arg0 + auxInt + aux.  arg1=mem.
 		{name: "MOVDload", argLength: 2, reg: fpload, aux: "SymOff", asm: "MOVD", typ: "Float64", faultOnNilArg0: true, symEffect: "Read"},  // load from arg0 + auxInt + aux.  arg1=mem.
 
+		// register indexed load
+		{name: "MOVVloadidx", argLength: 3, reg: gp2load, asm: "MOVV", typ: "UInt64"},   // load 64-bit dword from arg0 + arg1, arg2 = mem.
+		{name: "MOVWloadidx", argLength: 3, reg: gp2load, asm: "MOVW", typ: "Int32"},    // load 32-bit word from arg0 + arg1, sign-extended to 64-bit, arg2=mem.
+		{name: "MOVWUloadidx", argLength: 3, reg: gp2load, asm: "MOVWU", typ: "UInt32"}, // load 32-bit word from arg0 + arg1, zero-extended to 64-bit, arg2=mem.
+		{name: "MOVHloadidx", argLength: 3, reg: gp2load, asm: "MOVH", typ: "Int16"},    // load 16-bit word from arg0 + arg1, sign-extended to 64-bit, arg2=mem.
+		{name: "MOVHUloadidx", argLength: 3, reg: gp2load, asm: "MOVHU", typ: "UInt16"}, // load 16-bit word from arg0 + arg1, zero-extended to 64-bit, arg2=mem.
+		{name: "MOVBloadidx", argLength: 3, reg: gp2load, asm: "MOVB", typ: "Int8"},     // load 8-bit word from arg0 + arg1, sign-extended to 64-bit, arg2=mem.
+		{name: "MOVBUloadidx", argLength: 3, reg: gp2load, asm: "MOVBU", typ: "UInt8"},  // load 8-bit word from arg0 + arg1, zero-extended to 64-bit, arg2=mem.
+		{name: "MOVFloadidx", argLength: 3, reg: fp2load, asm: "MOVF", typ: "Float32"},  // load 32-bit float from arg0 + arg1, arg2=mem.
+		{name: "MOVDloadidx", argLength: 3, reg: fp2load, asm: "MOVD", typ: "Float64"},  // load 64-bit float from arg0 + arg1, arg2=mem.
+
 		{name: "MOVBstore", argLength: 3, reg: gpstore, aux: "SymOff", asm: "MOVB", typ: "Mem", faultOnNilArg0: true, symEffect: "Write"}, // store 1 byte of arg1 to arg0 + auxInt + aux.  arg2=mem.
 		{name: "MOVHstore", argLength: 3, reg: gpstore, aux: "SymOff", asm: "MOVH", typ: "Mem", faultOnNilArg0: true, symEffect: "Write"}, // store 2 bytes of arg1 to arg0 + auxInt + aux.  arg2=mem.
 		{name: "MOVWstore", argLength: 3, reg: gpstore, aux: "SymOff", asm: "MOVW", typ: "Mem", faultOnNilArg0: true, symEffect: "Write"}, // store 4 bytes of arg1 to arg0 + auxInt + aux.  arg2=mem.
@@ -245,10 +276,30 @@ func init() {
 		{name: "MOVFstore", argLength: 3, reg: fpstore, aux: "SymOff", asm: "MOVF", typ: "Mem", faultOnNilArg0: true, symEffect: "Write"}, // store 4 bytes of arg1 to arg0 + auxInt + aux.  arg2=mem.
 		{name: "MOVDstore", argLength: 3, reg: fpstore, aux: "SymOff", asm: "MOVD", typ: "Mem", faultOnNilArg0: true, symEffect: "Write"}, // store 8 bytes of arg1 to arg0 + auxInt + aux.  arg2=mem.
 
+		// register indexed store
+		{name: "MOVBstoreidx", argLength: 4, reg: gpstore2, asm: "MOVB", typ: "Mem"}, // store 1 byte of arg2 to arg0 + arg1, arg3 = mem.
+		{name: "MOVHstoreidx", argLength: 4, reg: gpstore2, asm: "MOVH", typ: "Mem"}, // store 2 bytes of arg2 to arg0 + arg1, arg3 = mem.
+		{name: "MOVWstoreidx", argLength: 4, reg: gpstore2, asm: "MOVW", typ: "Mem"}, // store 4 bytes of arg2 to arg0 + arg1, arg3 = mem.
+		{name: "MOVVstoreidx", argLength: 4, reg: gpstore2, asm: "MOVV", typ: "Mem"}, // store 8 bytes of arg2 to arg0 + arg1, arg3 = mem.
+		{name: "MOVFstoreidx", argLength: 4, reg: fpstore2, asm: "MOVF", typ: "Mem"}, // store 32-bit float of arg2 to arg0 + arg1, arg3=mem.
+		{name: "MOVDstoreidx", argLength: 4, reg: fpstore2, asm: "MOVD", typ: "Mem"}, // store 64-bit float of arg2 to arg0 + arg1, arg3=mem.
+
 		{name: "MOVBstorezero", argLength: 2, reg: gpstore0, aux: "SymOff", asm: "MOVB", typ: "Mem", faultOnNilArg0: true, symEffect: "Write"}, // store 1 byte of zero to arg0 + auxInt + aux.  arg1=mem.
 		{name: "MOVHstorezero", argLength: 2, reg: gpstore0, aux: "SymOff", asm: "MOVH", typ: "Mem", faultOnNilArg0: true, symEffect: "Write"}, // store 2 bytes of zero to arg0 + auxInt + aux.  arg1=mem.
 		{name: "MOVWstorezero", argLength: 2, reg: gpstore0, aux: "SymOff", asm: "MOVW", typ: "Mem", faultOnNilArg0: true, symEffect: "Write"}, // store 4 bytes of zero to arg0 + auxInt + aux.  arg1=mem.
 		{name: "MOVVstorezero", argLength: 2, reg: gpstore0, aux: "SymOff", asm: "MOVV", typ: "Mem", faultOnNilArg0: true, symEffect: "Write"}, // store 8 bytes of zero to arg0 + auxInt + aux.  ar12=mem.
+
+		// register indexed store zero
+		{name: "MOVBstorezeroidx", argLength: 3, reg: gpstore, asm: "MOVB", typ: "Mem"}, // store 1 byte of zero to arg0 + arg1, arg2 = mem.
+		{name: "MOVHstorezeroidx", argLength: 3, reg: gpstore, asm: "MOVH", typ: "Mem"}, // store 2 bytes of zero to arg0 + arg1, arg2 = mem.
+		{name: "MOVWstorezeroidx", argLength: 3, reg: gpstore, asm: "MOVW", typ: "Mem"}, // store 4 bytes of zero to arg0 + arg1, arg2 = mem.
+		{name: "MOVVstorezeroidx", argLength: 3, reg: gpstore, asm: "MOVV", typ: "Mem"}, // store 8 bytes of zero to arg0 + arg1, arg2 = mem.
+
+		// moves (no conversion)
+		{name: "MOVWfpgp", argLength: 1, reg: fpgp, asm: "MOVW"}, // move float32 to int32 (no conversion).
+		{name: "MOVWgpfp", argLength: 1, reg: gpfp, asm: "MOVW"}, // move int32 to float32 (no conversion).
+		{name: "MOVVfpgp", argLength: 1, reg: fpgp, asm: "MOVV"}, // move float64 to int64 (no conversion).
+		{name: "MOVVgpfp", argLength: 1, reg: gpfp, asm: "MOVV"}, // move int64 to float64 (no conversion).
 
 		// conversions
 		{name: "MOVBreg", argLength: 1, reg: gp11, asm: "MOVB"},   // move from arg0, sign-extended from byte
@@ -437,7 +488,7 @@ func init() {
 		{name: "LoweredGetCallerSP", argLength: 1, reg: gp01, rematerializeable: true},
 
 		// LoweredGetCallerPC evaluates to the PC to which its "caller" will return.
-		// I.e., if f calls g "calls" getcallerpc,
+		// I.e., if f calls g "calls" sys.GetCallerPC,
 		// the result should be the PC within f that g will return to.
 		// See runtime/stubs.go for a more detailed discussion.
 		{name: "LoweredGetCallerPC", reg: gp01, rematerializeable: true},
@@ -460,12 +511,18 @@ func init() {
 	blocks := []blockData{
 		{name: "EQ", controls: 1},
 		{name: "NE", controls: 1},
-		{name: "LTZ", controls: 1}, // < 0
-		{name: "LEZ", controls: 1}, // <= 0
-		{name: "GTZ", controls: 1}, // > 0
-		{name: "GEZ", controls: 1}, // >= 0
-		{name: "FPT", controls: 1}, // FP flag is true
-		{name: "FPF", controls: 1}, // FP flag is false
+		{name: "LTZ", controls: 1},  // < 0
+		{name: "LEZ", controls: 1},  // <= 0
+		{name: "GTZ", controls: 1},  // > 0
+		{name: "GEZ", controls: 1},  // >= 0
+		{name: "FPT", controls: 1},  // FP flag is true
+		{name: "FPF", controls: 1},  // FP flag is false
+		{name: "BEQ", controls: 2},  // controls[0] == controls[1]
+		{name: "BNE", controls: 2},  // controls[0] == controls[1]
+		{name: "BGE", controls: 2},  // controls[0] >= controls[1]
+		{name: "BLT", controls: 2},  // controls[0] < controls[1]
+		{name: "BGEU", controls: 2}, // controls[0] >= controls[1], unsigned
+		{name: "BLTU", controls: 2}, // controls[0] < controls[1], unsigned
 	}
 
 	archs = append(archs, arch{

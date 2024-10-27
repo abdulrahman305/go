@@ -15,8 +15,6 @@ var Syms symsStruct
 type symsStruct struct {
 	AssertE2I         *obj.LSym
 	AssertE2I2        *obj.LSym
-	AssertI2I         *obj.LSym
-	AssertI2I2        *obj.LSym
 	Asanread          *obj.LSym
 	Asanwrite         *obj.LSym
 	CgoCheckMemmove   *obj.LSym
@@ -75,8 +73,9 @@ type symsStruct struct {
 
 // Pkgs holds known packages.
 var Pkgs struct {
-	Go       *types.Pkg
-	Itab     *types.Pkg
-	Runtime  *types.Pkg
-	Coverage *types.Pkg
+	Go           *types.Pkg
+	Itab         *types.Pkg
+	Runtime      *types.Pkg
+	InternalMaps *types.Pkg
+	Coverage     *types.Pkg
 }

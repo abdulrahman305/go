@@ -26,10 +26,10 @@ import (
 	"cmd/go/internal/cache"
 	"cmd/go/internal/cfg"
 	"cmd/go/internal/load"
-	"cmd/go/internal/robustio"
 	"cmd/go/internal/str"
 	"cmd/go/internal/trace"
 	"cmd/internal/buildid"
+	"cmd/internal/robustio"
 )
 
 // A Builder holds global state about a build.
@@ -208,7 +208,7 @@ func actionGraphJSON(a *Action) string {
 		}
 	}
 
-	var list []*actionJSON
+	list := make([]*actionJSON, 0, len(workq))
 	for id, a := range workq {
 		if a.json == nil {
 			a.json = &actionJSON{
@@ -560,9 +560,9 @@ func (b *Builder) CompileAction(mode, depMode BuildMode, p *load.Package) *Actio
 		if p.Internal.PGOProfile != "" {
 			pgoAction := b.cacheAction("preprocess PGO profile "+p.Internal.PGOProfile, nil, func() *Action {
 				a := &Action{
-					Mode:    "preprocess PGO profile",
-					Actor:   &pgoActor{input: p.Internal.PGOProfile},
-					Objdir:  b.NewObjdir(),
+					Mode:   "preprocess PGO profile",
+					Actor:  &pgoActor{input: p.Internal.PGOProfile},
+					Objdir: b.NewObjdir(),
 				}
 				a.Target = filepath.Join(a.Objdir, "pgo.preprofile")
 
@@ -631,7 +631,7 @@ func (b *Builder) vetAction(mode, depMode BuildMode, p *load.Package) *Action {
 
 		// vet expects to be able to import "fmt".
 		var stk load.ImportStack
-		stk.Push("vet")
+		stk.Push(load.NewImportInfo("vet", nil))
 		p1, err := load.LoadImportWithFlags("fmt", p.Dir, p, &stk, nil, 0)
 		if err != nil {
 			base.Fatalf("unexpected error loading fmt package from package %s: %v", p.ImportPath, err)
