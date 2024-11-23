@@ -115,6 +115,7 @@ import (
 
 	"cmd/go/internal/base"
 	"cmd/go/internal/cfg"
+	"cmd/go/internal/fips140"
 	"cmd/go/internal/fsys"
 	"cmd/go/internal/gover"
 	"cmd/go/internal/imports"
@@ -348,7 +349,7 @@ func LoadPackages(ctx context.Context, opts PackageOpts, patterns ...string) (ma
 				}
 
 			case m.Pattern() == "tool":
-				for tool, _ := range MainModules.Tools() {
+				for tool := range MainModules.Tools() {
 					m.Pkgs = append(m.Pkgs, tool)
 				}
 			default:
@@ -669,7 +670,7 @@ func resolveLocalPackage(ctx context.Context, dir string, rs *Requirements) (str
 		}
 		if inWorkspaceMode() {
 			if mr := findModuleRoot(absDir); mr != "" {
-				return "", fmt.Errorf("%s is contained in a module that is not one of the workspace modules listed in go.work. You can add the module to the workspace using:\n\tgo work use %s", dirstr, base.ShortPathConservative(mr))
+				return "", fmt.Errorf("%s is contained in a module that is not one of the workspace modules listed in go.work. You can add the module to the workspace using:\n\tgo work use %s", dirstr, base.ShortPath(mr))
 			}
 			return "", fmt.Errorf("%s outside modules listed in go.work or their selected dependencies", dirstr)
 		}
@@ -1957,6 +1958,9 @@ func (ld *loader) pkgTest(ctx context.Context, pkg *loadPkg, testFlags loadPkgFl
 // stdVendor returns the canonical import path for the package with the given
 // path when imported from the standard-library package at parentPath.
 func (ld *loader) stdVendor(parentPath, path string) string {
+	if p, _, ok := fips140.ResolveImport(path); ok {
+		return p
+	}
 	if search.IsStandardImportPath(path) {
 		return path
 	}

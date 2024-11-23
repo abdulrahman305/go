@@ -2013,6 +2013,16 @@ func (c *conn) serve(ctx context.Context) {
 	c.bufr = newBufioReader(c.r)
 	c.bufw = newBufioWriterSize(checkConnErrorWriter{c}, 4<<10)
 
+	protos := c.server.protocols()
+	if c.tlsState == nil && protos.UnencryptedHTTP2() {
+		if c.maybeServeUnencryptedHTTP2(ctx) {
+			return
+		}
+	}
+	if !protos.HTTP1() {
+		return
+	}
+
 	for {
 		w, err := c.readRequest(ctx)
 		if c.r.remain != c.server.initialReadLimitSize() {
@@ -2130,6 +2140,70 @@ func (c *conn) serve(ctx context.Context) {
 
 		c.rwc.SetReadDeadline(time.Time{})
 	}
+}
+
+// unencryptedHTTP2Request is an HTTP handler that initializes
+// certain uninitialized fields in its *Request.
+//
+// It's the unencrypted version of initALPNRequest.
+type unencryptedHTTP2Request struct {
+	ctx context.Context
+	c   net.Conn
+	h   serverHandler
+}
+
+func (h unencryptedHTTP2Request) BaseContext() context.Context { return h.ctx }
+
+func (h unencryptedHTTP2Request) ServeHTTP(rw ResponseWriter, req *Request) {
+	if req.Body == nil {
+		req.Body = NoBody
+	}
+	if req.RemoteAddr == "" {
+		req.RemoteAddr = h.c.RemoteAddr().String()
+	}
+	h.h.ServeHTTP(rw, req)
+}
+
+// unencryptedNetConnInTLSConn is used to pass an unencrypted net.Conn to
+// functions that only accept a *tls.Conn.
+type unencryptedNetConnInTLSConn struct {
+	net.Conn // panic on all net.Conn methods
+	conn     net.Conn
+}
+
+func (c unencryptedNetConnInTLSConn) UnencryptedNetConn() net.Conn {
+	return c.conn
+}
+
+func unencryptedTLSConn(c net.Conn) *tls.Conn {
+	return tls.Client(unencryptedNetConnInTLSConn{conn: c}, nil)
+}
+
+// TLSNextProto key to use for unencrypted HTTP/2 connections.
+// Not actually a TLS-negotiated protocol.
+const nextProtoUnencryptedHTTP2 = "unencrypted_http2"
+
+func (c *conn) maybeServeUnencryptedHTTP2(ctx context.Context) bool {
+	fn, ok := c.server.TLSNextProto[nextProtoUnencryptedHTTP2]
+	if !ok {
+		return false
+	}
+	hasPreface := func(c *conn, preface []byte) bool {
+		c.r.setReadLimit(int64(len(preface)) - int64(c.bufr.Buffered()))
+		got, err := c.bufr.Peek(len(preface))
+		c.r.setInfiniteReadLimit()
+		return err == nil && bytes.Equal(got, preface)
+	}
+	if !hasPreface(c, []byte("PRI * HTTP/2.0")) {
+		return false
+	}
+	if !hasPreface(c, []byte("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n")) {
+		return false
+	}
+	c.setState(c.rwc, StateActive, skipHooks)
+	h := unencryptedHTTP2Request{ctx, c.rwc, serverHandler{c.server}}
+	fn(c.server, unencryptedTLSConn(c.rwc), h)
+	return true
 }
 
 func (w *response) sendExpectationFailed() {
@@ -2480,6 +2554,8 @@ func RedirectHandler(url string, code int) Handler {
 // ServeMux also takes care of sanitizing the URL request path and the Host
 // header, stripping the port number and redirecting any request containing . or
 // .. segments or repeated slashes to an equivalent, cleaner URL.
+// Escaped path elements such as "%2e" for "." and "%2f" for "/" are preserved
+// and aren't considered separators for request routing.
 //
 // # Compatibility
 //
@@ -2977,6 +3053,17 @@ type Server struct {
 	// See https://go.dev/issue/67813.
 	HTTP2 *HTTP2Config
 
+	// Protocols is the set of protocols accepted by the server.
+	//
+	// If Protocols includes UnencryptedHTTP2, the server will accept
+	// unencrypted HTTP/2 connections. The server can serve both
+	// HTTP/1 and unencrypted HTTP/2 on the same address and port.
+	//
+	// If Protocols is nil, the default is usually HTTP/1 and HTTP/2.
+	// If TLSNextProto is non-nil and does not contain an "h2" entry,
+	// the default is HTTP/1 only.
+	Protocols *Protocols
+
 	inShutdown atomic.Bool // true when server is in shutdown
 
 	disableKeepAlives atomic.Bool
@@ -3277,6 +3364,9 @@ func (s *Server) shouldConfigureHTTP2ForServe() bool {
 		// in case the listener returns an "h2" *tls.Conn.
 		return true
 	}
+	if s.protocols().UnencryptedHTTP2() {
+		return true
+	}
 	// The user specified a TLSConfig on their http.Server.
 	// In this, case, only configure HTTP/2 if their tls.Config
 	// explicitly mentions "h2". Otherwise http2.ConfigureServer
@@ -3387,9 +3477,7 @@ func (s *Server) ServeTLS(l net.Listener, certFile, keyFile string) error {
 	}
 
 	config := cloneTLSConfig(s.TLSConfig)
-	if !slices.Contains(config.NextProtos, "http/1.1") {
-		config.NextProtos = append(config.NextProtos, "http/1.1")
-	}
+	config.NextProtos = adjustNextProtos(config.NextProtos, s.protocols())
 
 	configHasCert := len(config.Certificates) > 0 || config.GetCertificate != nil || config.GetConfigForClient != nil
 	if !configHasCert || certFile != "" || keyFile != "" {
@@ -3403,6 +3491,59 @@ func (s *Server) ServeTLS(l net.Listener, certFile, keyFile string) error {
 
 	tlsListener := tls.NewListener(l, config)
 	return s.Serve(tlsListener)
+}
+
+func (s *Server) protocols() Protocols {
+	if s.Protocols != nil {
+		return *s.Protocols // user-configured set
+	}
+
+	// The historic way of disabling HTTP/2 is to set TLSNextProto to
+	// a non-nil map with no "h2" entry.
+	_, hasH2 := s.TLSNextProto["h2"]
+	http2Disabled := s.TLSNextProto != nil && !hasH2
+
+	// If GODEBUG=http2server=0, then HTTP/2 is disabled unless
+	// the user has manually added an "h2" entry to TLSNextProto
+	// (probably by using x/net/http2 directly).
+	if http2server.Value() == "0" && !hasH2 {
+		http2Disabled = true
+	}
+
+	var p Protocols
+	p.SetHTTP1(true) // default always includes HTTP/1
+	if !http2Disabled {
+		p.SetHTTP2(true)
+	}
+	return p
+}
+
+// adjustNextProtos adds or removes "http/1.1" and "h2" entries from
+// a tls.Config.NextProtos list, according to the set of protocols in protos.
+func adjustNextProtos(nextProtos []string, protos Protocols) []string {
+	var have Protocols
+	nextProtos = slices.DeleteFunc(nextProtos, func(s string) bool {
+		switch s {
+		case "http/1.1":
+			if !protos.HTTP1() {
+				return true
+			}
+			have.SetHTTP1(true)
+		case "h2":
+			if !protos.HTTP2() {
+				return true
+			}
+			have.SetHTTP2(true)
+		}
+		return false
+	})
+	if protos.HTTP2() && !have.HTTP2() {
+		nextProtos = append(nextProtos, "h2")
+	}
+	if protos.HTTP1() && !have.HTTP1() {
+		nextProtos = append(nextProtos, "http/1.1")
+	}
+	return nextProtos
 }
 
 // trackListener adds or removes a net.Listener to the set of tracked
@@ -3598,16 +3739,22 @@ func (s *Server) onceSetNextProtoDefaults() {
 	if omitBundledHTTP2 {
 		return
 	}
+	p := s.protocols()
+	if !p.HTTP2() && !p.UnencryptedHTTP2() {
+		return
+	}
 	if http2server.Value() == "0" {
 		http2server.IncNonDefault()
 		return
 	}
-	// Enable HTTP/2 by default if the user hasn't otherwise
-	// configured their TLSNextProto map.
-	if s.TLSNextProto == nil {
-		conf := &http2Server{}
-		s.nextProtoErr = http2ConfigureServer(s, conf)
+	if _, ok := s.TLSNextProto["h2"]; ok {
+		// TLSNextProto already contains an HTTP/2 implementation.
+		// The user probably called golang.org/x/net/http2.ConfigureServer
+		// to add it.
+		return
 	}
+	conf := &http2Server{}
+	s.nextProtoErr = http2ConfigureServer(s, conf)
 }
 
 // TimeoutHandler returns a [Handler] that runs h with the given time limit.

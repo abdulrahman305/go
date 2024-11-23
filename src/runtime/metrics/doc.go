@@ -250,6 +250,11 @@ Below is the full list of supported metrics, ordered lexicographically.
 		The number of non-default behaviors executed by the cmd/go
 		package due to a non-default GODEBUG=gocacheverify=... setting.
 
+	/godebug/non-default-behavior/gotestjsonbuildtext:events
+		The number of non-default behaviors executed by the cmd/go
+		package due to a non-default GODEBUG=gotestjsonbuildtext=...
+		setting.
+
 	/godebug/non-default-behavior/gotypesalias:events
 		The number of non-default behaviors executed by the go/types
 		package due to a non-default GODEBUG=gotypesalias=... setting.
@@ -306,13 +311,13 @@ Below is the full list of supported metrics, ordered lexicographically.
 		The number of non-default behaviors executed by the math/rand
 		package due to a non-default GODEBUG=randautoseed=... setting.
 
-	/godebug/non-default-behavior/randcrash:events
-		The number of non-default behaviors executed by the crypto/rand
-		package due to a non-default GODEBUG=randcrash=... setting.
-
 	/godebug/non-default-behavior/randseednop:events
 		The number of non-default behaviors executed by the math/rand
 		package due to a non-default GODEBUG=randseednop=... setting.
+
+	/godebug/non-default-behavior/rsa1024min:events
+		The number of non-default behaviors executed by the crypto/rsa
+		package due to a non-default GODEBUG=rsa1024min=... setting.
 
 	/godebug/non-default-behavior/tarinsecurepath:events
 		The number of non-default behaviors executed by the archive/tar
@@ -356,10 +361,6 @@ Below is the full list of supported metrics, ordered lexicographically.
 		The number of non-default behaviors executed by the crypto/x509
 		package due to a non-default GODEBUG=x509negativeserial=...
 		setting.
-
-	/godebug/non-default-behavior/x509sha1:events
-		The number of non-default behaviors executed by the crypto/x509
-		package due to a non-default GODEBUG=x509sha1=... setting.
 
 	/godebug/non-default-behavior/x509usefallbackroots:events
 		The number of non-default behaviors executed by the crypto/x509

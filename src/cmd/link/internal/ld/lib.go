@@ -416,7 +416,7 @@ func libinit(ctxt *Link) {
 		case BuildModeShared, BuildModePlugin:
 			// No *flagEntrySymbol for -buildmode=shared and plugin
 		default:
-			Errorf(nil, "unknown *flagEntrySymbol for buildmode %v", ctxt.BuildMode)
+			Errorf("unknown *flagEntrySymbol for buildmode %v", ctxt.BuildMode)
 		}
 	}
 }
@@ -672,6 +672,8 @@ func (ctxt *Link) loadlib() {
 		}
 	}
 
+	loadfips(ctxt)
+
 	// We've loaded all the code now.
 	ctxt.Loaded = true
 
@@ -742,7 +744,7 @@ func loadWindowsHostArchives(ctxt *Link) {
 	// Fix up references to DLL import symbols now that we're done
 	// pulling in new objects.
 	if err := loadpe.PostProcessImports(); err != nil {
-		Errorf(nil, "%v", err)
+		Errorf("%v", err)
 	}
 
 	// TODO: maybe do something similar to peimporteddlls to collect
@@ -848,7 +850,7 @@ func (ctxt *Link) linksetup() {
 			sb.SetType(sym.STLSBSS)
 			sb.SetSize(int64(ctxt.Arch.PtrSize))
 		} else if sb.Type() != sym.SDYNIMPORT {
-			Errorf(nil, "runtime declared tlsg variable %v", sb.Type())
+			Errorf("runtime declared tlsg variable %v", sb.Type())
 		}
 		ctxt.loader.SetAttrReachable(tlsg, true)
 		ctxt.Tlsg = tlsg
@@ -877,13 +879,13 @@ func (ctxt *Link) linksetup() {
 		if ctxt.Arch.Family == sys.ARM {
 			goarm := ctxt.loader.LookupOrCreateSym("runtime.goarm", 0)
 			sb := ctxt.loader.MakeSymbolUpdater(goarm)
-			sb.SetType(sym.SDATA)
+			sb.SetType(sym.SNOPTRDATA)
 			sb.SetSize(0)
 			sb.AddUint8(uint8(buildcfg.GOARM.Version))
 
 			goarmsoftfp := ctxt.loader.LookupOrCreateSym("runtime.goarmsoftfp", 0)
 			sb2 := ctxt.loader.MakeSymbolUpdater(goarmsoftfp)
-			sb2.SetType(sym.SDATA)
+			sb2.SetType(sym.SNOPTRDATA)
 			sb2.SetSize(0)
 			if buildcfg.GOARM.SoftFloat {
 				sb2.AddUint8(1)
@@ -899,7 +901,7 @@ func (ctxt *Link) linksetup() {
 		if memProfile != 0 && !ctxt.loader.AttrReachable(memProfile) && !ctxt.DynlinkingGo() {
 			memProfSym := ctxt.loader.LookupOrCreateSym("runtime.disableMemoryProfiling", 0)
 			sb := ctxt.loader.MakeSymbolUpdater(memProfSym)
-			sb.SetType(sym.SDATA)
+			sb.SetType(sym.SNOPTRDATA)
 			sb.SetSize(0)
 			sb.AddUint8(1) // true bool
 		}
@@ -960,7 +962,7 @@ func (ctxt *Link) mangleTypeSym() {
 	ldr := ctxt.loader
 	for s := loader.Sym(1); s < loader.Sym(ldr.NSym()); s++ {
 		if !ldr.AttrReachable(s) && !ctxt.linkShared {
-			// If -linkshared, the GCProg generation code may need to reach
+			// If -linkshared, the gc mask generation code may need to reach
 			// out to the shared library for the type descriptor's data, even
 			// the type descriptor itself is not actually needed at run time
 			// (therefore not reachable). We still need to mangle its name,
@@ -1226,7 +1228,7 @@ func hostobjs(ctxt *Link) {
 		}
 		f.MustSeek(h.off, 0)
 		if h.ld == nil {
-			Errorf(nil, "%s: unrecognized object file format", h.pn)
+			Errorf("%s: unrecognized object file format", h.pn)
 			continue
 		}
 		h.ld(ctxt, f, h.pkg, h.length, h.pn)
@@ -1352,7 +1354,7 @@ INSERT AFTER .debug_types;
 `
 	err := os.WriteFile(path, []byte(src), 0666)
 	if err != nil {
-		Errorf(nil, "WriteFile %s failed: %v", name, err)
+		Errorf("WriteFile %s failed: %v", name, err)
 	}
 	return path
 }
@@ -2072,6 +2074,7 @@ func (ctxt *Link) hostlink() {
 				return machoRewriteUuid(ctxt, exef, exem, outexe)
 			})
 	}
+	hostlinkfips(ctxt, *flagOutfile, *flagFipso)
 	if ctxt.NeedCodeSign() {
 		err := machoCodeSign(ctxt, *flagOutfile)
 		if err != nil {
@@ -2127,7 +2130,7 @@ func linkerFlagSupported(arch *sys.Arch, linker, altLinker, flag string) bool {
 	createTrivialCOnce.Do(func() {
 		src := filepath.Join(*flagTmpdir, "trivial.c")
 		if err := os.WriteFile(src, []byte("int main() { return 0; }"), 0666); err != nil {
-			Errorf(nil, "WriteFile trivial.c failed: %v", err)
+			Errorf("WriteFile trivial.c failed: %v", err)
 		}
 	})
 
@@ -2267,7 +2270,7 @@ func ldobj(ctxt *Link, f *bio.Reader, lib *sym.Library, length int64, pn string,
 		ldelf := func(ctxt *Link, f *bio.Reader, pkg string, length int64, pn string) {
 			textp, flags, err := loadelf.Load(ctxt.loader, ctxt.Arch, ctxt.IncVersion(), f, pkg, length, pn, ehdr.Flags)
 			if err != nil {
-				Errorf(nil, "%v", err)
+				Errorf("%v", err)
 				return
 			}
 			ehdr.Flags = flags
@@ -2280,7 +2283,7 @@ func ldobj(ctxt *Link, f *bio.Reader, lib *sym.Library, length int64, pn string,
 		ldmacho := func(ctxt *Link, f *bio.Reader, pkg string, length int64, pn string) {
 			textp, err := loadmacho.Load(ctxt.loader, ctxt.Arch, ctxt.IncVersion(), f, pkg, length, pn)
 			if err != nil {
-				Errorf(nil, "%v", err)
+				Errorf("%v", err)
 				return
 			}
 			ctxt.Textp = append(ctxt.Textp, textp...)
@@ -2296,7 +2299,7 @@ func ldobj(ctxt *Link, f *bio.Reader, lib *sym.Library, length int64, pn string,
 		ldpe := func(ctxt *Link, f *bio.Reader, pkg string, length int64, pn string) {
 			ls, err := loadpe.Load(ctxt.loader, ctxt.Arch, ctxt.IncVersion(), f, pkg, length, pn)
 			if err != nil {
-				Errorf(nil, "%v", err)
+				Errorf("%v", err)
 				return
 			}
 			if len(ls.Resources) != 0 {
@@ -2317,7 +2320,7 @@ func ldobj(ctxt *Link, f *bio.Reader, lib *sym.Library, length int64, pn string,
 		ldxcoff := func(ctxt *Link, f *bio.Reader, pkg string, length int64, pn string) {
 			textp, err := loadxcoff.Load(ctxt.loader, ctxt.Arch, ctxt.IncVersion(), f, pkg, length, pn)
 			if err != nil {
-				Errorf(nil, "%v", err)
+				Errorf("%v", err)
 				return
 			}
 			ctxt.Textp = append(ctxt.Textp, textp...)
@@ -2336,7 +2339,7 @@ func ldobj(ctxt *Link, f *bio.Reader, lib *sym.Library, length int64, pn string,
 	/* check the header */
 	line, err := f.ReadString('\n')
 	if err != nil {
-		Errorf(nil, "truncated object file: %s: %v", pn, err)
+		Errorf("truncated object file: %s: %v", pn, err)
 		return nil
 	}
 
@@ -2348,17 +2351,17 @@ func ldobj(ctxt *Link, f *bio.Reader, lib *sym.Library, length int64, pn string,
 
 		if line == ctxt.Arch.Name {
 			// old header format: just $GOOS
-			Errorf(nil, "%s: stale object file", pn)
+			Errorf("%s: stale object file", pn)
 			return nil
 		}
 
-		Errorf(nil, "%s: not an object file: @%d %q", pn, start, line)
+		Errorf("%s: not an object file: @%d %q", pn, start, line)
 		return nil
 	}
 
 	// First, check that the basic GOOS, GOARCH, and Version match.
 	if line != wantHdr {
-		Errorf(nil, "%s: linked object header mismatch:\nhave %q\nwant %q\n", pn, line, wantHdr)
+		Errorf("%s: linked object header mismatch:\nhave %q\nwant %q\n", pn, line, wantHdr)
 	}
 
 	// Skip over exports and other info -- ends with \n!\n.
@@ -2388,7 +2391,7 @@ func ldobj(ctxt *Link, f *bio.Reader, lib *sym.Library, length int64, pn string,
 		c2 = c3
 		c3 = bgetc(f)
 		if c3 == -1 {
-			Errorf(nil, "truncated object file: %s", pn)
+			Errorf("truncated object file: %s", pn)
 			return nil
 		}
 	}
@@ -2484,11 +2487,11 @@ func readelfsymboldata(ctxt *Link, f *elf.File, sym *elf.Symbol) []byte {
 	data := make([]byte, sym.Size)
 	sect := f.Sections[sym.Section]
 	if sect.Type != elf.SHT_PROGBITS && sect.Type != elf.SHT_NOTE {
-		Errorf(nil, "reading %s from non-data section", sym.Name)
+		Errorf("reading %s from non-data section", sym.Name)
 	}
 	n, err := sect.ReadAt(data, int64(sym.Value-sect.Addr))
 	if uint64(n) != sym.Size {
-		Errorf(nil, "reading contents of %s: %v", sym.Name, err)
+		Errorf("reading contents of %s: %v", sym.Name, err)
 	}
 	return data
 }
@@ -2552,7 +2555,7 @@ func findshlib(ctxt *Link, shlib string) string {
 			return libpath
 		}
 	}
-	Errorf(nil, "cannot find shared library: %s", shlib)
+	Errorf("cannot find shared library: %s", shlib)
 	return ""
 }
 
@@ -2578,7 +2581,7 @@ func ldshlibsyms(ctxt *Link, shlib string) {
 
 	f, err := elf.Open(libpath)
 	if err != nil {
-		Errorf(nil, "cannot open shared library: %s", libpath)
+		Errorf("cannot open shared library: %s", libpath)
 		return
 	}
 	// Keep the file open as decodetypeGcprog needs to read from it.
@@ -2587,13 +2590,13 @@ func ldshlibsyms(ctxt *Link, shlib string) {
 
 	hash, err := readnote(f, ELF_NOTE_GO_NAME, ELF_NOTE_GOABIHASH_TAG)
 	if err != nil {
-		Errorf(nil, "cannot read ABI hash from shared library %s: %v", libpath, err)
+		Errorf("cannot read ABI hash from shared library %s: %v", libpath, err)
 		return
 	}
 
 	depsbytes, err := readnote(f, ELF_NOTE_GO_NAME, ELF_NOTE_GODEPS_TAG)
 	if err != nil {
-		Errorf(nil, "cannot read dep list from shared library %s: %v", libpath, err)
+		Errorf("cannot read dep list from shared library %s: %v", libpath, err)
 		return
 	}
 	var deps []string
@@ -2615,10 +2618,11 @@ func ldshlibsyms(ctxt *Link, shlib string) {
 
 	syms, err := f.DynamicSymbols()
 	if err != nil {
-		Errorf(nil, "cannot read symbols from shared library: %s", libpath)
+		Errorf("cannot read symbols from shared library: %s", libpath)
 		return
 	}
 
+	symAddr := map[string]uint64{}
 	for _, elfsym := range syms {
 		if elf.ST_TYPE(elfsym.Info) == elf.STT_NOTYPE || elf.ST_TYPE(elfsym.Info) == elf.STT_SECTION {
 			continue
@@ -2670,8 +2674,82 @@ func ldshlibsyms(ctxt *Link, shlib string) {
 		if symname != elfsym.Name {
 			l.SetSymExtname(s, elfsym.Name)
 		}
+		symAddr[elfsym.Name] = elfsym.Value
 	}
-	ctxt.Shlibs = append(ctxt.Shlibs, Shlib{Path: libpath, Hash: hash, Deps: deps, File: f})
+
+	// Load relocations.
+	// We only really need these for grokking the links between type descriptors
+	// when dynamic linking.
+	relocTarget := map[uint64]string{}
+	addends := false
+	sect := f.SectionByType(elf.SHT_REL)
+	if sect == nil {
+		sect = f.SectionByType(elf.SHT_RELA)
+		if sect == nil {
+			log.Fatalf("can't find SHT_REL or SHT_RELA section of %s", shlib)
+		}
+		addends = true
+	}
+	// TODO: Multiple SHT_RELA/SHT_REL sections?
+	data, err := sect.Data()
+	if err != nil {
+		log.Fatalf("can't read relocation section of %s: %v", shlib, err)
+	}
+	bo := f.ByteOrder
+	for len(data) > 0 {
+		var off, idx uint64
+		var addend int64
+		switch f.Class {
+		case elf.ELFCLASS64:
+			off = bo.Uint64(data)
+			info := bo.Uint64(data[8:])
+			data = data[16:]
+			if addends {
+				addend = int64(bo.Uint64(data))
+				data = data[8:]
+			}
+
+			idx = info >> 32
+			typ := info & 0xffff
+			// buildmode=shared is only supported for amd64,arm64,loong64,s390x,ppc64le.
+			// (List found by looking at the translation of R_ADDR by ../$ARCH/asm.go:elfreloc1)
+			switch typ {
+			case uint64(elf.R_X86_64_64):
+			case uint64(elf.R_AARCH64_ABS64):
+			case uint64(elf.R_LARCH_64):
+			case uint64(elf.R_390_64):
+			case uint64(elf.R_PPC64_ADDR64):
+			default:
+				continue
+			}
+		case elf.ELFCLASS32:
+			off = uint64(bo.Uint32(data))
+			info := bo.Uint32(data[4:])
+			data = data[8:]
+			if addends {
+				addend = int64(int32(bo.Uint32(data)))
+				data = data[4:]
+			}
+
+			idx = uint64(info >> 8)
+			typ := info & 0xff
+			// buildmode=shared is only supported for 386,arm.
+			switch typ {
+			case uint32(elf.R_386_32):
+			case uint32(elf.R_ARM_ABS32):
+			default:
+				continue
+			}
+		default:
+			log.Fatalf("unknown bit size %s", f.Class)
+		}
+		if addend != 0 {
+			continue
+		}
+		relocTarget[off] = syms[idx-1].Name
+	}
+
+	ctxt.Shlibs = append(ctxt.Shlibs, Shlib{Path: libpath, Hash: hash, Deps: deps, File: f, symAddr: symAddr, relocTarget: relocTarget})
 }
 
 func addsection(ldr *loader.Loader, arch *sys.Arch, seg *sym.Segment, name string, rwx int) *sym.Section {
@@ -2741,14 +2819,14 @@ func Entryvalue(ctxt *Link) int64 {
 	ldr := ctxt.loader
 	s := ldr.Lookup(a, 0)
 	if s == 0 {
-		Errorf(nil, "missing entry symbol %q", a)
+		Errorf("missing entry symbol %q", a)
 		return 0
 	}
 	st := ldr.SymType(s)
 	if st == 0 {
 		return *FlagTextAddr
 	}
-	if !ctxt.IsAIX() && st != sym.STEXT {
+	if !ctxt.IsAIX() && !st.IsText() {
 		ldr.Errorf(s, "entry not text")
 	}
 	return ldr.SymValue(s)
@@ -2768,7 +2846,7 @@ func (ctxt *Link) callgraph() {
 			if rs == 0 {
 				continue
 			}
-			if r.Type().IsDirectCall() && ldr.SymType(rs) == sym.STEXT {
+			if r.Type().IsDirectCall() && ldr.SymType(rs).IsText() {
 				ctxt.Logf("%s calls %s\n", ldr.SymName(s), ldr.SymName(rs))
 			}
 		}

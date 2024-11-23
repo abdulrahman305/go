@@ -76,8 +76,7 @@ const DefaultMaxIdleConnsPerHost = 2
 // Transport uses HTTP/1.1 for HTTP URLs and either HTTP/1.1 or HTTP/2
 // for HTTPS URLs, depending on whether the server supports HTTP/2,
 // and how the Transport is configured. The [DefaultTransport] supports HTTP/2.
-// To explicitly enable HTTP/2 on a transport, use golang.org/x/net/http2
-// and call ConfigureTransport. See the package docs for more about HTTP/2.
+// To explicitly enable HTTP/2 on a transport, set [Transport.Protocols].
 //
 // Responses with status codes in the 1xx range are either handled
 // automatically (100 expect-continue) or ignored. The one
@@ -300,6 +299,16 @@ type Transport struct {
 	// This field does not yet have any effect.
 	// See https://go.dev/issue/67813.
 	HTTP2 *HTTP2Config
+
+	// Protocols is the set of protocols supported by the transport.
+	//
+	// If Protocols includes UnencryptedHTTP2 and does not include HTTP1,
+	// the transport will use unencrypted HTTP/2 for requests for http:// URLs.
+	//
+	// If Protocols is nil, the default is usually HTTP/1 only.
+	// If ForceAttemptHTTP2 is true, or if TLSNextProto contains an "h2" entry,
+	// the default is HTTP/1 and HTTP/2.
+	Protocols *Protocols
 }
 
 func (t *Transport) writeBufferSize() int {
@@ -348,6 +357,10 @@ func (t *Transport) Clone() *Transport {
 	if t.HTTP2 != nil {
 		t2.HTTP2 = &HTTP2Config{}
 		*t2.HTTP2 = *t.HTTP2
+	}
+	if t.Protocols != nil {
+		t2.Protocols = &Protocols{}
+		*t2.Protocols = *t.Protocols
 	}
 	if !t.tlsNextProtoWasNil {
 		npm := maps.Clone(t.TLSNextProto)
@@ -399,18 +412,8 @@ func (t *Transport) onceSetNextProtoDefaults() {
 		}
 	}
 
-	if t.TLSNextProto != nil {
-		// This is the documented way to disable http2 on a
-		// Transport.
-		return
-	}
-	if !t.ForceAttemptHTTP2 && (t.TLSClientConfig != nil || t.Dial != nil || t.DialContext != nil || t.hasCustomTLSDialer()) {
-		// Be conservative and don't automatically enable
-		// http2 if they've specified a custom TLS config or
-		// custom dialers. Let them opt-in themselves via
-		// http2.ConfigureTransport so we don't surprise them
-		// by modifying their tls.Config. Issue 14275.
-		// However, if ForceAttemptHTTP2 is true, it overrides the above checks.
+	protocols := t.protocols()
+	if !protocols.HTTP2() && !protocols.UnencryptedHTTP2() {
 		return
 	}
 	if omitBundledHTTP2 {
@@ -437,6 +440,40 @@ func (t *Transport) onceSetNextProtoDefaults() {
 			t2.MaxHeaderListSize = uint32(limit1)
 		}
 	}
+
+	// Server.ServeTLS clones the tls.Config before modifying it.
+	// Transport doesn't. We may want to make the two consistent some day.
+	//
+	// http2configureTransport will have already set NextProtos, but adjust it again
+	// here to remove HTTP/1.1 if the user has disabled it.
+	t.TLSClientConfig.NextProtos = adjustNextProtos(t.TLSClientConfig.NextProtos, protocols)
+}
+
+func (t *Transport) protocols() Protocols {
+	if t.Protocols != nil {
+		return *t.Protocols // user-configured set
+	}
+	var p Protocols
+	p.SetHTTP1(true) // default always includes HTTP/1
+	switch {
+	case t.TLSNextProto != nil:
+		// Setting TLSNextProto to an empty map is a documented way
+		// to disable HTTP/2 on a Transport.
+		if t.TLSNextProto["h2"] != nil {
+			p.SetHTTP2(true)
+		}
+	case !t.ForceAttemptHTTP2 && (t.TLSClientConfig != nil || t.Dial != nil || t.DialContext != nil || t.hasCustomTLSDialer()):
+		// Be conservative and don't automatically enable
+		// http2 if they've specified a custom TLS config or
+		// custom dialers. Let them opt-in themselves via
+		// Transport.Protocols.SetHTTP2(true) so we don't surprise them
+		// by modifying their tls.Config. Issue 14275.
+		// However, if ForceAttemptHTTP2 is true, it overrides the above checks.
+	case http2client.Value() == "0":
+	default:
+		p.SetHTTP2(true)
+	}
+	return p
 }
 
 // ProxyFromEnvironment returns the URL of the proxy to use for a
@@ -1866,6 +1903,24 @@ func (t *Transport) dialConn(ctx context.Context, cm connectMethod) (pconn *pers
 		if err := pconn.addTLS(ctx, cm.tlsHost(), trace); err != nil {
 			return nil, err
 		}
+	}
+
+	// Possible unencrypted HTTP/2 with prior knowledge.
+	unencryptedHTTP2 := pconn.tlsState == nil &&
+		t.Protocols != nil &&
+		t.Protocols.UnencryptedHTTP2() &&
+		!t.Protocols.HTTP1()
+	if unencryptedHTTP2 {
+		next, ok := t.TLSNextProto[nextProtoUnencryptedHTTP2]
+		if !ok {
+			return nil, errors.New("http: Transport does not support unencrypted HTTP/2")
+		}
+		alt := next(cm.targetAddr, unencryptedTLSConn(pconn.conn))
+		if e, ok := alt.(erringRoundTripper); ok {
+			// pconn.conn was closed by next (http2configureTransports.upgradeFn).
+			return nil, e.RoundTripErr()
+		}
+		return &persistConn{t: t, cacheKey: pconn.cacheKey, alt: alt}, nil
 	}
 
 	if s := pconn.tlsState; s != nil && s.NegotiatedProtocolIsMutual && s.NegotiatedProtocol != "" {

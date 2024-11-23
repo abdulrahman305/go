@@ -554,13 +554,7 @@ func userArenaHeapBitsSetType(typ *_type, ptr unsafe.Pointer, s *mspan) {
 	base := s.base()
 	h := s.writeUserArenaHeapBits(uintptr(ptr))
 
-	p := typ.GCData // start of 1-bit pointer mask (or GC program)
-	var gcProgBits uintptr
-	if typ.Kind_&abi.KindGCProg != 0 {
-		// Expand gc program, using the object itself for storage.
-		gcProgBits = runGCProg(addb(p, 4), (*byte)(ptr))
-		p = (*byte)(ptr)
-	}
+	p := getGCMask(typ) // start of 1-bit pointer mask
 	nb := typ.PtrBytes / goarch.PtrSize
 
 	for i := uintptr(0); i < nb; i += ptrBits {
@@ -584,11 +578,6 @@ func userArenaHeapBitsSetType(typ *_type, ptr unsafe.Pointer, s *mspan) {
 	// are always fully cleared when reused.
 	h = h.pad(s, typ.Size_-typ.PtrBytes)
 	h.flush(s, uintptr(ptr), typ.Size_)
-
-	if typ.Kind_&abi.KindGCProg != 0 {
-		// Zero out temporary ptrmask buffer inside object.
-		memclrNoHeapPointers(ptr, (gcProgBits+7)/8)
-	}
 
 	// Update the PtrBytes value in the type information. After this
 	// point, the GC will observe the new bitmap.
@@ -798,11 +787,8 @@ func newUserArenaChunk() (unsafe.Pointer, *mspan) {
 
 	if asanenabled {
 		// TODO(mknyszek): Track individual objects.
-		rzSize := redZoneSize(span.elemsize)
-		span.elemsize -= rzSize
-		span.largeType.Size_ = span.elemsize
+		// N.B. span.elemsize includes a redzone already.
 		rzStart := span.base() + span.elemsize
-		span.userArenaChunkFree = makeAddrRange(span.base(), rzStart)
 		asanpoison(unsafe.Pointer(rzStart), span.limit-rzStart)
 		asanunpoison(unsafe.Pointer(span.base()), span.elemsize)
 	}
@@ -1066,6 +1052,11 @@ func (h *mheap) allocUserArenaChunk() *mspan {
 	s.limit = s.base() + s.elemsize
 	s.freeindex = 1
 	s.allocCount = 1
+
+	// Adjust size to include redzone.
+	if asanenabled {
+		s.elemsize -= redZoneSize(s.elemsize)
+	}
 
 	// Account for this new arena chunk memory.
 	gcController.heapInUse.add(int64(userArenaChunkBytes))

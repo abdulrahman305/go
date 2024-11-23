@@ -1073,13 +1073,47 @@ func (o *Optab) size(ctxt *obj.Link, p *obj.Prog) int {
 		// 2-byte and 1-byte aligned addresses, so the address of load/store must be aligned.
 		// Also symbols with prefix of "go:string." are Go strings, which will go into
 		// the symbol table, their addresses are not necessary aligned, rule this out.
+		//
+		// Note that the code generation routines for these addressing forms call o.size
+		// to decide whether to use the unaligned/aligned forms, so o.size's result is always
+		// in sync with the code generation decisions, because it *is* the code generation decision.
 		align := int64(1 << sz)
-		if o.a1 == C_ADDR && p.From.Offset%align == 0 && !strings.HasPrefix(p.From.Sym.Name, "go:string.") ||
-			o.a4 == C_ADDR && p.To.Offset%align == 0 && !strings.HasPrefix(p.To.Sym.Name, "go:string.") {
+		if o.a1 == C_ADDR && p.From.Offset%align == 0 && symAlign(p.From.Sym) >= align ||
+			o.a4 == C_ADDR && p.To.Offset%align == 0 && symAlign(p.To.Sym) >= align {
 			return 8
 		}
 	}
 	return int(o.size_)
+}
+
+// symAlign returns the expected symbol alignment of the symbol s.
+// This must match the linker's own default alignment decisions.
+func symAlign(s *obj.LSym) int64 {
+	name := s.Name
+	switch {
+	case strings.HasPrefix(name, "go:string."),
+		strings.HasPrefix(name, "type:.namedata."),
+		strings.HasPrefix(name, "type:.importpath."),
+		strings.HasSuffix(name, ".opendefer"),
+		strings.HasSuffix(name, ".arginfo0"),
+		strings.HasSuffix(name, ".arginfo1"),
+		strings.HasSuffix(name, ".argliveinfo"):
+		// These are just bytes, or varints.
+		return 1
+	case strings.HasPrefix(name, "gclocals·"):
+		// It has 32-bit fields.
+		return 4
+	default:
+		switch {
+		case s.Size%8 == 0:
+			return 8
+		case s.Size%4 == 0:
+			return 4
+		case s.Size%2 == 0:
+			return 2
+		}
+	}
+	return 1
 }
 
 func span7(ctxt *obj.Link, cursym *obj.LSym, newprog obj.ProgAlloc) {
@@ -3580,21 +3614,22 @@ func (c *ctxt7) asmout(p *obj.Prog, out []uint32) (count int) {
 			break
 		}
 
-		rel := obj.Addrel(c.cursym)
-		rel.Off = int32(c.pc)
-		rel.Siz = 4
-		rel.Sym = p.To.Sym
-		rel.Add = p.To.Offset
-		rel.Type = objabi.R_CALLARM64
+		c.cursym.AddRel(c.ctxt, obj.Reloc{
+			Type: objabi.R_CALLARM64,
+			Off:  int32(c.pc),
+			Siz:  4,
+			Sym:  p.To.Sym,
+			Add:  p.To.Offset,
+		})
 
 	case 6: /* b ,O(R); bl ,O(R) */
 		o1 = c.opbrr(p, p.As)
 		o1 |= uint32(p.To.Reg&31) << 5
 		if p.As == obj.ACALL {
-			rel := obj.Addrel(c.cursym)
-			rel.Off = int32(c.pc)
-			rel.Siz = 0
-			rel.Type = objabi.R_CALLIND
+			c.cursym.AddRel(c.ctxt, obj.Reloc{
+				Type: objabi.R_CALLIND,
+				Off:  int32(c.pc),
+			})
 		}
 
 	case 7: /* beq s */
@@ -3660,12 +3695,13 @@ func (c *ctxt7) asmout(p *obj.Prog, out []uint32) (count int) {
 		o1 = uint32(c.instoffset)
 		o2 = uint32(c.instoffset >> 32)
 		if p.To.Sym != nil {
-			rel := obj.Addrel(c.cursym)
-			rel.Off = int32(c.pc)
-			rel.Siz = 8
-			rel.Sym = p.To.Sym
-			rel.Add = p.To.Offset
-			rel.Type = objabi.R_ADDR
+			c.cursym.AddRel(c.ctxt, obj.Reloc{
+				Type: objabi.R_ADDR,
+				Off:  int32(c.pc),
+				Siz:  8,
+				Sym:  p.To.Sym,
+				Add:  p.To.Offset,
+			})
 			o2 = 0
 			o1 = o2
 		}
@@ -3736,13 +3772,13 @@ func (c *ctxt7) asmout(p *obj.Prog, out []uint32) (count int) {
 		if p.To.Sym != nil {
 			// This case happens with words generated
 			// in the PC stream as part of the literal pool.
-			rel := obj.Addrel(c.cursym)
-
-			rel.Off = int32(c.pc)
-			rel.Siz = 4
-			rel.Sym = p.To.Sym
-			rel.Add = p.To.Offset
-			rel.Type = objabi.R_ADDR
+			c.cursym.AddRel(c.ctxt, obj.Reloc{
+				Type: objabi.R_ADDR,
+				Off:  int32(c.pc),
+				Siz:  4,
+				Sym:  p.To.Sym,
+				Add:  p.To.Offset,
+			})
 			o1 = 0
 		}
 
@@ -4659,37 +4695,43 @@ func (c *ctxt7) asmout(p *obj.Prog, out []uint32) (count int) {
 			c.ctxt.Diag("cannot use REGTMP as source: %v\n", p)
 		}
 		o1 = ADR(1, 0, REGTMP)
-		rel := obj.Addrel(c.cursym)
-		rel.Off = int32(c.pc)
-		rel.Siz = 8
-		rel.Sym = p.To.Sym
-		rel.Add = p.To.Offset
+		var typ objabi.RelocType
 		// For unaligned access, fall back to adrp + add + movT R, (REGTMP).
 		if o.size(c.ctxt, p) != 8 {
 			o2 = c.opirr(p, AADD) | REGTMP&31<<5 | REGTMP&31
 			o3 = c.olsr12u(p, c.opstr(p, p.As), 0, REGTMP, p.From.Reg)
-			rel.Type = objabi.R_ADDRARM64
-			break
+			typ = objabi.R_ADDRARM64
+		} else {
+			o2 = c.olsr12u(p, c.opstr(p, p.As), 0, REGTMP, p.From.Reg)
+			typ = c.addrRelocType(p)
 		}
-		o2 = c.olsr12u(p, c.opstr(p, p.As), 0, REGTMP, p.From.Reg)
-		rel.Type = c.addrRelocType(p)
+		c.cursym.AddRel(c.ctxt, obj.Reloc{
+			Type: typ,
+			Off:  int32(c.pc),
+			Siz:  8,
+			Sym:  p.To.Sym,
+			Add:  p.To.Offset,
+		})
 
 	case 65: /* movT addr,R -> adrp + movT (REGTMP), R */
 		o1 = ADR(1, 0, REGTMP)
-		rel := obj.Addrel(c.cursym)
-		rel.Off = int32(c.pc)
-		rel.Siz = 8
-		rel.Sym = p.From.Sym
-		rel.Add = p.From.Offset
+		var typ objabi.RelocType
 		// For unaligned access, fall back to adrp + add + movT (REGTMP), R.
 		if o.size(c.ctxt, p) != 8 {
 			o2 = c.opirr(p, AADD) | REGTMP&31<<5 | REGTMP&31
 			o3 = c.olsr12u(p, c.opldr(p, p.As), 0, REGTMP, p.To.Reg)
-			rel.Type = objabi.R_ADDRARM64
-			break
+			typ = objabi.R_ADDRARM64
+		} else {
+			o2 = c.olsr12u(p, c.opldr(p, p.As), 0, REGTMP, p.To.Reg)
+			typ = c.addrRelocType(p)
 		}
-		o2 = c.olsr12u(p, c.opldr(p, p.As), 0, REGTMP, p.To.Reg)
-		rel.Type = c.addrRelocType(p)
+		c.cursym.AddRel(c.ctxt, obj.Reloc{
+			Type: typ,
+			Off:  int32(c.pc),
+			Siz:  8,
+			Sym:  p.From.Sym,
+			Add:  p.From.Offset,
+		})
 
 	case 66: /* ldp O(R)!, (r1, r2); ldp (R)O!, (r1, r2) */
 		rf, rt1, rt2 := p.From.Reg, p.To.Reg, int16(p.To.Offset)
@@ -4721,21 +4763,23 @@ func (c *ctxt7) asmout(p *obj.Prog, out []uint32) (count int) {
 		}
 		o1 = ADR(1, 0, uint32(p.To.Reg))
 		o2 = c.opirr(p, AADD) | uint32(p.To.Reg&31)<<5 | uint32(p.To.Reg&31)
-		rel := obj.Addrel(c.cursym)
-		rel.Off = int32(c.pc)
-		rel.Siz = 8
-		rel.Sym = p.From.Sym
-		rel.Add = p.From.Offset
-		rel.Type = objabi.R_ADDRARM64
+		c.cursym.AddRel(c.ctxt, obj.Reloc{
+			Type: objabi.R_ADDRARM64,
+			Off:  int32(c.pc),
+			Siz:  8,
+			Sym:  p.From.Sym,
+			Add:  p.From.Offset,
+		})
 
 	case 69: /* LE model movd $tlsvar, reg -> movz reg, 0 + reloc */
 		o1 = c.opirr(p, AMOVZ)
 		o1 |= uint32(p.To.Reg & 31)
-		rel := obj.Addrel(c.cursym)
-		rel.Off = int32(c.pc)
-		rel.Siz = 4
-		rel.Sym = p.From.Sym
-		rel.Type = objabi.R_ARM64_TLS_LE
+		c.cursym.AddRel(c.ctxt, obj.Reloc{
+			Type: objabi.R_ARM64_TLS_LE,
+			Off:  int32(c.pc),
+			Siz:  4,
+			Sym:  p.From.Sym,
+		})
 		if p.From.Offset != 0 {
 			c.ctxt.Diag("invalid offset on MOVW $tlsvar")
 		}
@@ -4743,12 +4787,12 @@ func (c *ctxt7) asmout(p *obj.Prog, out []uint32) (count int) {
 	case 70: /* IE model movd $tlsvar, reg -> adrp REGTMP, 0; ldr reg, [REGTMP, #0] + relocs */
 		o1 = ADR(1, 0, REGTMP)
 		o2 = c.olsr12u(p, c.opldr(p, AMOVD), 0, REGTMP, p.To.Reg)
-		rel := obj.Addrel(c.cursym)
-		rel.Off = int32(c.pc)
-		rel.Siz = 8
-		rel.Sym = p.From.Sym
-		rel.Add = 0
-		rel.Type = objabi.R_ARM64_TLS_IE
+		c.cursym.AddRel(c.ctxt, obj.Reloc{
+			Type: objabi.R_ARM64_TLS_IE,
+			Off:  int32(c.pc),
+			Siz:  8,
+			Sym:  p.From.Sym,
+		})
 		if p.From.Offset != 0 {
 			c.ctxt.Diag("invalid offset on MOVW $tlsvar")
 		}
@@ -4756,12 +4800,12 @@ func (c *ctxt7) asmout(p *obj.Prog, out []uint32) (count int) {
 	case 71: /* movd sym@GOT, reg -> adrp REGTMP, #0; ldr reg, [REGTMP, #0] + relocs */
 		o1 = ADR(1, 0, REGTMP)
 		o2 = c.olsr12u(p, c.opldr(p, AMOVD), 0, REGTMP, p.To.Reg)
-		rel := obj.Addrel(c.cursym)
-		rel.Off = int32(c.pc)
-		rel.Siz = 8
-		rel.Sym = p.From.Sym
-		rel.Add = 0
-		rel.Type = objabi.R_ARM64_GOTPCREL
+		c.cursym.AddRel(c.ctxt, obj.Reloc{
+			Type: objabi.R_ARM64_GOTPCREL,
+			Off:  int32(c.pc),
+			Siz:  8,
+			Sym:  p.From.Sym,
+		})
 
 	case 72: /* vaddp/vand/vcmeq/vorr/vadd/veor/vfmla/vfmls/vbit/vbsl/vcmtst/vsub/vbif/vuzip1/vuzip2/vrax1 Vm.<T>, Vn.<T>, Vd.<T> */
 		af := int((p.From.Reg >> 5) & 15)
@@ -5295,24 +5339,26 @@ func (c *ctxt7) asmout(p *obj.Prog, out []uint32) (count int) {
 		}
 		o1 = ADR(1, 0, REGTMP)
 		o2 = c.opirr(p, AADD) | REGTMP&31<<5 | REGTMP&31
-		rel := obj.Addrel(c.cursym)
-		rel.Off = int32(c.pc)
-		rel.Siz = 8
-		rel.Sym = p.To.Sym
-		rel.Add = p.To.Offset
-		rel.Type = objabi.R_ADDRARM64
+		c.cursym.AddRel(c.ctxt, obj.Reloc{
+			Type: objabi.R_ADDRARM64,
+			Off:  int32(c.pc),
+			Siz:  8,
+			Sym:  p.To.Sym,
+			Add:  p.To.Offset,
+		})
 		o3 = c.opldpstp(p, o, 0, REGTMP, rf1, rf2, 0)
 
 	case 88: /* ldp addr(SB), (r,r) -> adrp + add + ldp */
 		rt1, rt2 := p.To.Reg, int16(p.To.Offset)
 		o1 = ADR(1, 0, REGTMP)
 		o2 = c.opirr(p, AADD) | REGTMP&31<<5 | REGTMP&31
-		rel := obj.Addrel(c.cursym)
-		rel.Off = int32(c.pc)
-		rel.Siz = 8
-		rel.Sym = p.From.Sym
-		rel.Add = p.From.Offset
-		rel.Type = objabi.R_ADDRARM64
+		c.cursym.AddRel(c.ctxt, obj.Reloc{
+			Type: objabi.R_ADDRARM64,
+			Off:  int32(c.pc),
+			Siz:  8,
+			Sym:  p.From.Sym,
+			Add:  p.From.Offset,
+		})
 		o3 = c.opldpstp(p, o, 0, REGTMP, rt1, rt2, 1)
 
 	case 89: /* vadd/vsub Vm, Vn, Vd */

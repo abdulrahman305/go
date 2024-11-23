@@ -429,7 +429,7 @@ func writeExportSec(ctxt *ld.Link, ldr *loader.Loader, lenHostImports int) {
 		}
 		s := ldr.Lookup(entry, 0)
 		if s == 0 {
-			ld.Errorf(nil, "export symbol %s not defined", entry)
+			ld.Errorf("export symbol %s not defined", entry)
 		}
 		idx := uint32(lenHostImports) + uint32(ldr.SymValue(s)>>16) - funcValueOffset
 		writeName(ctxt.Out, entryExpName)   // the wasi entrypoint
@@ -449,7 +449,7 @@ func writeExportSec(ctxt *ld.Link, ldr *loader.Loader, lenHostImports int) {
 		for _, name := range []string{"run", "resume", "getsp"} {
 			s := ldr.Lookup("wasm_export_"+name, 0)
 			if s == 0 {
-				ld.Errorf(nil, "export symbol %s not defined", "wasm_export_"+name)
+				ld.Errorf("export symbol %s not defined", "wasm_export_"+name)
 			}
 			idx := uint32(lenHostImports) + uint32(ldr.SymValue(s)>>16) - funcValueOffset
 			writeName(ctxt.Out, name)           // inst.exports.run/resume/getsp in wasm_exec.js
@@ -689,7 +689,7 @@ func fieldsToTypes(fields []obj.WasmField) []byte {
 	b := make([]byte, len(fields))
 	for i, f := range fields {
 		switch f.Type {
-		case obj.WasmI32, obj.WasmPtr:
+		case obj.WasmI32, obj.WasmPtr, obj.WasmBool:
 			b[i] = I32
 		case obj.WasmI64:
 			b[i] = I64

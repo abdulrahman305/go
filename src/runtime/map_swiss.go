@@ -9,7 +9,6 @@ package runtime
 import (
 	"internal/abi"
 	"internal/runtime/maps"
-	"internal/runtime/math"
 	"internal/runtime/sys"
 	"unsafe"
 )
@@ -22,6 +21,14 @@ const (
 
 type maptype = abi.SwissMapType
 
+//go:linkname maps_errNilAssign internal/runtime/maps.errNilAssign
+var maps_errNilAssign error = plainError("assignment to entry in nil map")
+
+//go:linkname maps_mapKeyError internal/runtime/maps.mapKeyError
+func maps_mapKeyError(t *abi.SwissMapType, p unsafe.Pointer) error {
+	return mapKeyError(t, p)
+}
+
 func makemap64(t *abi.SwissMapType, hint int64, m *maps.Map) *maps.Map {
 	if int64(int(hint)) != hint {
 		hint = 0
@@ -30,69 +37,23 @@ func makemap64(t *abi.SwissMapType, hint int64, m *maps.Map) *maps.Map {
 }
 
 // makemap_small implements Go map creation for make(map[k]v) and
-// make(map[k]v, hint) when hint is known to be at most bucketCnt
+// make(map[k]v, hint) when hint is known to be at most abi.SwissMapGroupSlots
 // at compile time and the map needs to be allocated on the heap.
 func makemap_small() *maps.Map {
-	panic("unimplemented")
-}
-
-// checkHint verifies that hint is reasonable, adjusting as necessary.
-func checkHint(t *abi.SwissMapType, hint int) uint64 {
-	if hint <= 0 {
-		return 0
-	}
-
-	capacity := uint64(hint)
-
-	// Ensure a groups allocation for a capacity this high doesn't exceed
-	// the maximum allocation size.
-	//
-	// TODO(prattmic): Once we split tables, a large hint will result in
-	// splitting the tables up front, which will use smaller individual
-	// allocations.
-	//
-	// TODO(prattmic): This logic is largely duplicated from maps.newTable
-	// / maps.(*table).reset.
-	capacity, overflow := alignUpPow2(capacity)
-	if !overflow {
-		groupCount := capacity / abi.SwissMapGroupSlots
-		mem, overflow := math.MulUintptr(uintptr(groupCount), t.Group.Size_)
-		if overflow || mem > maxAlloc {
-			return 0
-		}
-	} else {
-		return 0
-	}
-
-	return capacity
+	return maps.NewEmptyMap()
 }
 
 // makemap implements Go map creation for make(map[k]v, hint).
-// If the compiler has determined that the map or the first bucket
-// can be created on the stack, h and/or bucket may be non-nil.
-// If h != nil, the map can be created directly in h.
-// If h.buckets != nil, bucket pointed to can be used as the first bucket.
+// If the compiler has determined that the map or the first group
+// can be created on the stack, m and optionally m.dirPtr may be non-nil.
+// If m != nil, the map can be created directly in m.
+// If m.dirPtr != nil, it points to a group usable for a small map.
 func makemap(t *abi.SwissMapType, hint int, m *maps.Map) *maps.Map {
-	capacity := checkHint(t, hint)
-
-	// TODO: use existing m
-	return maps.NewMap(t, capacity)
-}
-
-// alignUpPow2 rounds n up to the next power of 2.
-//
-// Returns true if round up causes overflow.
-//
-// TODO(prattmic): deduplicate from internal/runtime/maps.
-func alignUpPow2(n uint64) (uint64, bool) {
-	if n == 0 {
-		return 0, false
+	if hint < 0 {
+		hint = 0
 	}
-	v := (uint64(1) << sys.Len64(n-1))
-	if v == 0 {
-		return 0, true
-	}
-	return v, false
+
+	return maps.NewMap(t, uintptr(hint), m, maxAlloc)
 }
 
 // mapaccess1 returns a pointer to h[key].  Never returns nil, instead
@@ -100,63 +61,14 @@ func alignUpPow2(n uint64) (uint64, bool) {
 // the key is not in the map.
 // NOTE: The returned pointer may keep the whole map live, so don't
 // hold onto it for very long.
-func mapaccess1(t *abi.SwissMapType, m *maps.Map, key unsafe.Pointer) unsafe.Pointer {
-	// TODO: concurrent checks.
-	if raceenabled && m != nil {
-		callerpc := sys.GetCallerPC()
-		pc := abi.FuncPCABIInternal(mapaccess1)
-		racereadpc(unsafe.Pointer(m), callerpc, pc)
-		raceReadObjectPC(t.Key, key, callerpc, pc)
-	}
-	if msanenabled && m != nil {
-		msanread(key, t.Key.Size_)
-	}
-	if asanenabled && m != nil {
-		asanread(key, t.Key.Size_)
-	}
+//
+// mapaccess1 is pushed from internal/runtime/maps. We could just call it, but
+// we want to avoid one layer of call.
+//
+//go:linkname mapaccess1
+func mapaccess1(t *abi.SwissMapType, m *maps.Map, key unsafe.Pointer) unsafe.Pointer
 
-	if m == nil || m.Used() == 0 {
-		if err := mapKeyError(t, key); err != nil {
-			panic(err) // see issue 23734
-		}
-		return unsafe.Pointer(&zeroVal[0])
-	}
-
-	elem, ok := m.Get(key)
-	if !ok {
-		return unsafe.Pointer(&zeroVal[0])
-	}
-	return elem
-}
-
-func mapaccess2(t *abi.SwissMapType, m *maps.Map, key unsafe.Pointer) (unsafe.Pointer, bool) {
-	// TODO: concurrent checks.
-	if raceenabled && m != nil {
-		callerpc := sys.GetCallerPC()
-		pc := abi.FuncPCABIInternal(mapaccess2)
-		racereadpc(unsafe.Pointer(m), callerpc, pc)
-		raceReadObjectPC(t.Key, key, callerpc, pc)
-	}
-	if msanenabled && m != nil {
-		msanread(key, t.Key.Size_)
-	}
-	if asanenabled && m != nil {
-		asanread(key, t.Key.Size_)
-	}
-
-	if m == nil || m.Used() == 0 {
-		if err := mapKeyError(t, key); err != nil {
-			panic(err) // see issue 23734
-		}
-		return unsafe.Pointer(&zeroVal[0]), false
-	}
-
-	elem, ok := m.Get(key)
-	if !ok {
-		return unsafe.Pointer(&zeroVal[0]), false
-	}
-	return elem, true
-}
+func mapaccess2(t *abi.SwissMapType, m *maps.Map, key unsafe.Pointer) (unsafe.Pointer, bool)
 
 func mapaccess1_fat(t *abi.SwissMapType, m *maps.Map, key, zero unsafe.Pointer) unsafe.Pointer {
 	e := mapaccess1(t, m, key)
@@ -174,29 +86,13 @@ func mapaccess2_fat(t *abi.SwissMapType, m *maps.Map, key, zero unsafe.Pointer) 
 	return e, true
 }
 
-func mapassign(t *abi.SwissMapType, m *maps.Map, key unsafe.Pointer) unsafe.Pointer {
-	// TODO: concurrent checks.
-	if m == nil {
-		panic(plainError("assignment to entry in nil map"))
-	}
-	if raceenabled {
-		callerpc := sys.GetCallerPC()
-		pc := abi.FuncPCABIInternal(mapassign)
-		racewritepc(unsafe.Pointer(m), callerpc, pc)
-		raceReadObjectPC(t.Key, key, callerpc, pc)
-	}
-	if msanenabled {
-		msanread(key, t.Key.Size_)
-	}
-	if asanenabled {
-		asanread(key, t.Key.Size_)
-	}
-
-	return m.PutSlot(key)
-}
+// mapassign is pushed from internal/runtime/maps. We could just call it, but
+// we want to avoid one layer of call.
+//
+//go:linkname mapassign
+func mapassign(t *abi.SwissMapType, m *maps.Map, key unsafe.Pointer) unsafe.Pointer
 
 func mapdelete(t *abi.SwissMapType, m *maps.Map, key unsafe.Pointer) {
-	// TODO: concurrent checks.
 	if raceenabled && m != nil {
 		callerpc := sys.GetCallerPC()
 		pc := abi.FuncPCABIInternal(mapdelete)
@@ -210,14 +106,7 @@ func mapdelete(t *abi.SwissMapType, m *maps.Map, key unsafe.Pointer) {
 		asanread(key, t.Key.Size_)
 	}
 
-	if m == nil || m.Used() == 0 {
-		if err := mapKeyError(t, key); err != nil {
-			panic(err) // see issue 23734
-		}
-		return
-	}
-
-	m.Delete(key)
+	m.Delete(t, key)
 }
 
 // mapiterinit initializes the Iter struct used for ranging over maps.
@@ -235,7 +124,6 @@ func mapiterinit(t *abi.SwissMapType, m *maps.Map, it *maps.Iter) {
 }
 
 func mapiternext(it *maps.Iter) {
-	// TODO: concurrent checks.
 	if raceenabled {
 		callerpc := sys.GetCallerPC()
 		racereadpc(unsafe.Pointer(it.Map()), callerpc, abi.FuncPCABIInternal(mapiternext))
@@ -246,18 +134,13 @@ func mapiternext(it *maps.Iter) {
 
 // mapclear deletes all keys from a map.
 func mapclear(t *abi.SwissMapType, m *maps.Map) {
-	// TODO: concurrent checks.
 	if raceenabled && m != nil {
 		callerpc := sys.GetCallerPC()
 		pc := abi.FuncPCABIInternal(mapclear)
 		racewritepc(unsafe.Pointer(m), callerpc, pc)
 	}
 
-	if m == nil || m.Used() == 0 {
-		return
-	}
-
-	m.Clear()
+	m.Clear(t)
 }
 
 // Reflect stubs. Called from ../reflect/asm_*.s
@@ -386,7 +269,7 @@ func mapclone2(t *abi.SwissMapType, src *maps.Map) *maps.Map {
 	var iter maps.Iter
 	iter.Init(t, src)
 	for iter.Next(); iter.Key() != nil; iter.Next() {
-		dst.Put(iter.Key(), iter.Elem())
+		dst.Put(t, iter.Key(), iter.Elem())
 	}
 
 	return dst

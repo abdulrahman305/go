@@ -6,6 +6,7 @@ package runtime_test
 
 import (
 	"encoding/binary"
+	"flag"
 	"fmt"
 	"math/rand"
 	"runtime"
@@ -15,6 +16,8 @@ import (
 	"testing"
 	"unsafe"
 )
+
+var mapbench = flag.Bool("mapbench", false, "enable the full set of map benchmark variants")
 
 const size = 10
 
@@ -193,10 +196,12 @@ func BenchmarkSmallStrMap(b *testing.B) {
 	}
 }
 
-func BenchmarkMapStringKeysEight_16(b *testing.B) { benchmarkMapStringKeysEight(b, 16) }
-func BenchmarkMapStringKeysEight_32(b *testing.B) { benchmarkMapStringKeysEight(b, 32) }
-func BenchmarkMapStringKeysEight_64(b *testing.B) { benchmarkMapStringKeysEight(b, 64) }
-func BenchmarkMapStringKeysEight_1M(b *testing.B) { benchmarkMapStringKeysEight(b, 1<<20) }
+func BenchmarkMapStringKeysEight_16(b *testing.B)  { benchmarkMapStringKeysEight(b, 16) }
+func BenchmarkMapStringKeysEight_32(b *testing.B)  { benchmarkMapStringKeysEight(b, 32) }
+func BenchmarkMapStringKeysEight_64(b *testing.B)  { benchmarkMapStringKeysEight(b, 64) }
+func BenchmarkMapStringKeysEight_128(b *testing.B) { benchmarkMapStringKeysEight(b, 128) }
+func BenchmarkMapStringKeysEight_256(b *testing.B) { benchmarkMapStringKeysEight(b, 256) }
+func BenchmarkMapStringKeysEight_1M(b *testing.B)  { benchmarkMapStringKeysEight(b, 1<<20) }
 
 func benchmarkMapStringKeysEight(b *testing.B, keySize int) {
 	m := make(map[string]bool)
@@ -253,12 +258,41 @@ func BenchmarkMapLast(b *testing.B) {
 	}
 }
 
+func cyclicPermutation(n int) []int {
+	// From https://crypto.stackexchange.com/questions/51787/creating-single-cycle-permutations
+	p := rand.New(rand.NewSource(1)).Perm(n)
+	inc := make([]int, n)
+	pInv := make([]int, n)
+	for i := 0; i < n; i++ {
+		inc[i] = (i + 1) % n
+		pInv[p[i]] = i
+	}
+	res := make([]int, n)
+	for i := 0; i < n; i++ {
+		res[i] = pInv[inc[p[i]]]
+	}
+
+	// Test result.
+	j := 0
+	for i := 0; i < n-1; i++ {
+		j = res[j]
+		if j == 0 {
+			panic("got back to 0 too early")
+		}
+	}
+	j = res[j]
+	if j != 0 {
+		panic("didn't get back to 0")
+	}
+	return res
+}
+
 func BenchmarkMapCycle(b *testing.B) {
 	// Arrange map entries to be a permutation, so that
 	// we hit all entries, and one lookup is data dependent
 	// on the previous lookup.
 	const N = 3127
-	p := rand.New(rand.NewSource(1)).Perm(N)
+	p := cyclicPermutation(N)
 	m := map[int]int{}
 	for i := 0; i < N; i++ {
 		m[i] = p[i]
@@ -511,8 +545,32 @@ func benchSizes(f func(b *testing.B, n int)) func(*testing.B) {
 		1 << 22,
 	}
 
+	// Cases enabled by default. Set -mapbench for the remainder.
+	//
+	// With the other type combinations, there are literally thousands of
+	// variations. It take too long to run all of these as part of
+	// builders.
+	byDefault := map[int]bool{
+		6:       true,
+		64:      true,
+		1 << 16: true,
+	}
+
 	return func(b *testing.B) {
 		for _, n := range cases {
+			b.Run("len="+strconv.Itoa(n), func(b *testing.B) {
+				if !*mapbench && !byDefault[n] {
+					b.Skip("Skipped because -mapbench=false")
+				}
+
+				f(b, n)
+			})
+		}
+	}
+}
+func smallBenchSizes(f func(b *testing.B, n int)) func(*testing.B) {
+	return func(b *testing.B) {
+		for n := 1; n <= 8; n++ {
 			b.Run("len="+strconv.Itoa(n), func(b *testing.B) {
 				f(b, n)
 			})
@@ -694,6 +752,42 @@ func BenchmarkMapIter(b *testing.B) {
 	b.Run("Key=int32/Elem=bigType", benchSizes(benchmarkMapIter[int32, bigType]))
 	b.Run("Key=*int32/Elem=int32", benchSizes(benchmarkMapIter[*int32, int32]))
 	b.Run("Key=int32/Elem=*int32", benchSizes(benchmarkMapIter[int32, *int32]))
+}
+
+func benchmarkMapIterLowLoad[K mapBenchmarkKeyType, E mapBenchmarkElemType](b *testing.B, n int) {
+	// Only insert one entry regardless of map size.
+	k := genValues[K](0, 1)
+	e := genValues[E](0, 1)
+
+	m := make(map[K]E, n)
+	for i := range k {
+		m[k[i]] = e[i]
+	}
+
+	iterations := iterCount(b, n)
+	sinkK := newSink[K]()
+	sinkE := newSink[E]()
+	b.ResetTimer()
+
+	for i := 0; i < iterations; i++ {
+		for k, e := range m {
+			*sinkK = k
+			*sinkE = e
+		}
+	}
+}
+
+func BenchmarkMapIterLowLoad(b *testing.B) {
+	b.Run("Key=int32/Elem=int32", benchSizes(benchmarkMapIterLowLoad[int32, int32]))
+	b.Run("Key=int64/Elem=int64", benchSizes(benchmarkMapIterLowLoad[int64, int64]))
+	b.Run("Key=string/Elem=string", benchSizes(benchmarkMapIterLowLoad[string, string]))
+	b.Run("Key=smallType/Elem=int32", benchSizes(benchmarkMapIterLowLoad[smallType, int32]))
+	b.Run("Key=mediumType/Elem=int32", benchSizes(benchmarkMapIterLowLoad[mediumType, int32]))
+	b.Run("Key=bigType/Elem=int32", benchSizes(benchmarkMapIterLowLoad[bigType, int32]))
+	b.Run("Key=bigType/Elem=bigType", benchSizes(benchmarkMapIterLowLoad[bigType, bigType]))
+	b.Run("Key=int32/Elem=bigType", benchSizes(benchmarkMapIterLowLoad[int32, bigType]))
+	b.Run("Key=*int32/Elem=int32", benchSizes(benchmarkMapIterLowLoad[*int32, int32]))
+	b.Run("Key=int32/Elem=*int32", benchSizes(benchmarkMapIterLowLoad[int32, *int32]))
 }
 
 func benchmarkMapAccessHit[K mapBenchmarkKeyType, E mapBenchmarkElemType](b *testing.B, n int) {
@@ -1071,4 +1165,26 @@ func BenchmarkMapPop(b *testing.B) {
 	b.Run("Key=int32/Elem=bigType", benchSizes(benchmarkMapPop[int32, bigType]))
 	b.Run("Key=*int32/Elem=int32", benchSizes(benchmarkMapPop[*int32, int32]))
 	b.Run("Key=int32/Elem=*int32", benchSizes(benchmarkMapPop[int32, *int32]))
+}
+
+func BenchmarkMapDeleteLargeKey(b *testing.B) {
+	m := map[string]int{}
+	for i := range 9 {
+		m[fmt.Sprintf("%d", i)] = i
+	}
+	key := strings.Repeat("*", 10000)
+	for range b.N {
+		delete(m, key)
+	}
+}
+
+func BenchmarkMapSmallAccessHit(b *testing.B) {
+	b.Run("Key=int32/Elem=int32", smallBenchSizes(benchmarkMapAccessHit[int32, int32]))
+	b.Run("Key=int64/Elem=int64", smallBenchSizes(benchmarkMapAccessHit[int64, int64]))
+	b.Run("Key=string/Elem=string", smallBenchSizes(benchmarkMapAccessHit[string, string]))
+}
+func BenchmarkMapSmallAccessMiss(b *testing.B) {
+	b.Run("Key=int32/Elem=int32", smallBenchSizes(benchmarkMapAccessMiss[int32, int32]))
+	b.Run("Key=int64/Elem=int64", smallBenchSizes(benchmarkMapAccessMiss[int64, int64]))
+	b.Run("Key=string/Elem=string", smallBenchSizes(benchmarkMapAccessMiss[string, string]))
 }

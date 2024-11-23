@@ -409,7 +409,7 @@ func elfwritephdrs(out *OutBuf) uint32 {
 func newElfPhdr() *ElfPhdr {
 	e := new(ElfPhdr)
 	if ehdr.Phnum >= NSECT {
-		Errorf(nil, "too many phdrs")
+		Errorf("too many phdrs")
 	} else {
 		phdr[ehdr.Phnum] = e
 		ehdr.Phnum++
@@ -427,7 +427,7 @@ func newElfShdr(name int64) *ElfShdr {
 	e.Name = uint32(name)
 	e.shnum = elf.SectionIndex(ehdr.Shnum)
 	if ehdr.Shnum >= NSECT {
-		Errorf(nil, "too many shdrs")
+		Errorf("too many shdrs")
 	} else {
 		shdr[ehdr.Shnum] = e
 		ehdr.Shnum++
@@ -1161,7 +1161,7 @@ func elfshnamedup(name string) *ElfShdr {
 		}
 	}
 
-	Errorf(nil, "cannot find elf name %s", name)
+	Errorf("cannot find elf name %s", name)
 	errorexit()
 	return nil
 }
@@ -1195,7 +1195,7 @@ func elfshbits(linkmode LinkMode, sect *sym.Section) *ElfShdr {
 			// list note). The real fix is probably to define new values
 			// for Symbol.Type corresponding to mapped and unmapped notes
 			// and handle them in dodata().
-			Errorf(nil, "sh.Type == SHT_NOTE in elfshbits when linking internally")
+			Errorf("sh.Type == SHT_NOTE in elfshbits when linking internally")
 		}
 		sh.Addralign = uint64(sect.Align)
 		sh.Size = sect.Length
@@ -1437,6 +1437,7 @@ func (ctxt *Link) doelf() {
 	shstrtabAddstring(".noptrbss")
 	shstrtabAddstring(".go.fuzzcntrs")
 	shstrtabAddstring(".go.buildinfo")
+	shstrtabAddstring(".go.fipsinfo")
 	if ctxt.IsMIPS() {
 		shstrtabAddstring(".MIPS.abiflags")
 		shstrtabAddstring(".gnu.attributes")
@@ -1494,6 +1495,7 @@ func (ctxt *Link) doelf() {
 			shstrtabAddstring(elfRelType + ".data.rel.ro")
 		}
 		shstrtabAddstring(elfRelType + ".go.buildinfo")
+		shstrtabAddstring(elfRelType + ".go.fipsinfo")
 		if ctxt.IsMIPS() {
 			shstrtabAddstring(elfRelType + ".MIPS.abiflags")
 			shstrtabAddstring(elfRelType + ".gnu.attributes")
@@ -2386,13 +2388,13 @@ elfobj:
 	}
 
 	if a > elfreserve {
-		Errorf(nil, "ELFRESERVE too small: %d > %d with %d text sections", a, elfreserve, numtext)
+		Errorf("ELFRESERVE too small: %d > %d with %d text sections", a, elfreserve, numtext)
 	}
 
 	// Verify the amount of space allocated for the elf header is sufficient.  The file offsets are
 	// already computed in layout, so we could spill into another section.
 	if a > int64(HEADR) {
-		Errorf(nil, "HEADR too small: %d > %d with %d text sections", a, HEADR, numtext)
+		Errorf("HEADR too small: %d > %d with %d text sections", a, HEADR, numtext)
 	}
 }
 
@@ -2414,7 +2416,7 @@ func elfadddynsym(ldr *loader.Loader, target *Target, syms *ArchSyms, s loader.S
 		/* type */
 		var t uint8
 
-		if cgoexp && st == sym.STEXT {
+		if cgoexp && st.IsText() {
 			t = elf.ST_INFO(elf.STB_GLOBAL, elf.STT_FUNC)
 		} else {
 			t = elf.ST_INFO(elf.STB_GLOBAL, elf.STT_OBJECT)
@@ -2464,9 +2466,9 @@ func elfadddynsym(ldr *loader.Loader, target *Target, syms *ArchSyms, s loader.S
 		var t uint8
 
 		// TODO(mwhudson): presumably the behavior should actually be the same on both arm and 386.
-		if target.Arch.Family == sys.I386 && cgoexp && st == sym.STEXT {
+		if target.Arch.Family == sys.I386 && cgoexp && st.IsText() {
 			t = elf.ST_INFO(elf.STB_GLOBAL, elf.STT_FUNC)
-		} else if target.Arch.Family == sys.ARM && cgoeDynamic && st == sym.STEXT {
+		} else if target.Arch.Family == sys.ARM && cgoeDynamic && st.IsText() {
 			t = elf.ST_INFO(elf.STB_GLOBAL, elf.STT_FUNC)
 		} else {
 			t = elf.ST_INFO(elf.STB_GLOBAL, elf.STT_OBJECT)

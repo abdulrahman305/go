@@ -559,7 +559,7 @@ func machoshbits(ctxt *Link, mseg *MachoSeg, sect *sym.Section, segname string) 
 	if sect.Vaddr < sect.Seg.Vaddr+sect.Seg.Filelen {
 		// data in file
 		if sect.Length > sect.Seg.Vaddr+sect.Seg.Filelen-sect.Vaddr {
-			Errorf(nil, "macho cannot represent section %s crossing data and bss", sect.Name)
+			Errorf("macho cannot represent section %s crossing data and bss", sect.Name)
 		}
 		msect.off = uint32(sect.Seg.Fileoff + sect.Vaddr - sect.Seg.Vaddr)
 	} else {
@@ -866,7 +866,7 @@ func collectmachosyms(ctxt *Link) {
 	if !*FlagS {
 		if !ctxt.DynlinkingGo() {
 			s := ldr.Lookup("runtime.text", 0)
-			if ldr.SymType(s) == sym.STEXT {
+			if ldr.SymType(s).IsText() {
 				addsym(s)
 			}
 		}
@@ -880,7 +880,7 @@ func collectmachosyms(ctxt *Link) {
 		}
 		if !ctxt.DynlinkingGo() {
 			s := ldr.Lookup("runtime.etext", 0)
-			if ldr.SymType(s) == sym.STEXT {
+			if ldr.SymType(s).IsText() {
 				addsym(s)
 			}
 		}

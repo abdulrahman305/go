@@ -673,8 +673,7 @@ func TestCreateSelfSignedCertificate(t *testing.T) {
 			IPAddresses:    []net.IP{net.IPv4(127, 0, 0, 1).To4(), net.ParseIP("2001:4860:0:2001::68")},
 			URIs:           []*url.URL{parseURI("https://foo.com/wibble#foo")},
 
-			PolicyIdentifiers:       []asn1.ObjectIdentifier{[]int{1, 2, 3}},
-			Policies:                []OID{mustNewOIDFromInts(t, []uint64{1, 2, 3, math.MaxUint32, math.MaxUint64})},
+			Policies:                []OID{mustNewOIDFromInts([]uint64{1, 2, 3, math.MaxUint32, math.MaxUint64})},
 			PermittedDNSDomains:     []string{".example.com", "example.com"},
 			ExcludedDNSDomains:      []string{"bar.example.com"},
 			PermittedIPRanges:       []*net.IPNet{parseCIDR("192.168.1.1/16"), parseCIDR("1.2.3.4/8")},
@@ -712,8 +711,8 @@ func TestCreateSelfSignedCertificate(t *testing.T) {
 			continue
 		}
 
-		if len(cert.PolicyIdentifiers) != 1 || !cert.PolicyIdentifiers[0].Equal(template.PolicyIdentifiers[0]) {
-			t.Errorf("%s: failed to parse policy identifiers: got:%#v want:%#v", test.name, cert.PolicyIdentifiers, template.PolicyIdentifiers)
+		if len(cert.Policies) != 1 || !cert.Policies[0].Equal(template.Policies[0]) {
+			t.Errorf("%s: failed to parse policy identifiers: got:%#v want:%#v", test.name, cert.PolicyIdentifiers, template.Policies)
 		}
 
 		if len(cert.PermittedDNSDomains) != 2 || cert.PermittedDNSDomains[0] != ".example.com" || cert.PermittedDNSDomains[1] != "example.com" {
@@ -1817,8 +1816,8 @@ func TestInsecureAlgorithmErrorString(t *testing.T) {
 		want string
 	}{
 		{MD5WithRSA, "x509: cannot verify signature: insecure algorithm MD5-RSA"},
-		{SHA1WithRSA, "x509: cannot verify signature: insecure algorithm SHA1-RSA (temporarily override with GODEBUG=x509sha1=1)"},
-		{ECDSAWithSHA1, "x509: cannot verify signature: insecure algorithm ECDSA-SHA1 (temporarily override with GODEBUG=x509sha1=1)"},
+		{SHA1WithRSA, "x509: cannot verify signature: insecure algorithm SHA1-RSA"},
+		{ECDSAWithSHA1, "x509: cannot verify signature: insecure algorithm ECDSA-SHA1"},
 		{MD2WithRSA, "x509: cannot verify signature: insecure algorithm 1"},
 		{-1, "x509: cannot verify signature: insecure algorithm -1"},
 		{0, "x509: cannot verify signature: insecure algorithm 0"},
@@ -1898,11 +1897,6 @@ func TestSHA1(t *testing.T) {
 	}
 	if _, ok := err.(InsecureAlgorithmError); !ok {
 		t.Fatalf("certificate verification returned %v (%T), wanted InsecureAlgorithmError", err, err)
-	}
-
-	t.Setenv("GODEBUG", "x509sha1=1")
-	if err = cert.CheckSignatureFrom(cert); err != nil {
-		t.Fatalf("SHA-1 certificate did not verify with GODEBUG=x509sha1=1: %v", err)
 	}
 }
 
@@ -2326,6 +2320,37 @@ func TestAdditionFieldsInGeneralSubtree(t *testing.T) {
 	block, _ := pem.Decode([]byte(additionalGeneralSubtreePEM))
 	if _, err := ParseCertificate(block.Bytes); err != nil {
 		t.Fatalf("failed to parse certificate: %s", err)
+	}
+}
+
+func TestEmptySerialNumber(t *testing.T) {
+	template := Certificate{
+		DNSNames: []string{"example.com"},
+	}
+
+	for range 100 {
+		derBytes, err := CreateCertificate(rand.Reader, &template, &template, &testPrivateKey.PublicKey, testPrivateKey)
+		if err != nil {
+			t.Fatalf("failed to create certificate: %s", err)
+		}
+
+		cert, err := ParseCertificate(derBytes)
+		if err != nil {
+			t.Fatalf("failed to parse certificate: %s", err)
+		}
+
+		if sign := cert.SerialNumber.Sign(); sign != 1 {
+			t.Fatalf("generated a non positive serial, sign: %d", sign)
+		}
+
+		b, err := asn1.Marshal(cert.SerialNumber)
+		if err != nil {
+			t.Fatalf("failed to marshal generated serial number: %s", err)
+		}
+		// subtract 2 for tag and length
+		if l := len(b) - 2; l > 20 {
+			t.Fatalf("generated serial number larger than 20 octets when encoded: %d", l)
+		}
 	}
 }
 
@@ -2981,12 +3006,8 @@ func TestUnknownExtKey(t *testing.T) {
 		DNSNames:     []string{"foo"},
 		ExtKeyUsage:  []ExtKeyUsage{ExtKeyUsage(-1)},
 	}
-	signer, err := rsa.GenerateKey(rand.Reader, 1024)
-	if err != nil {
-		t.Errorf("failed to generate key for TestUnknownExtKey")
-	}
 
-	_, err = CreateCertificate(rand.Reader, template, template, signer.Public(), signer)
+	_, err := CreateCertificate(rand.Reader, template, template, testPrivateKey.Public(), testPrivateKey)
 	if !strings.Contains(err.Error(), errorContains) {
 		t.Errorf("expected error containing %q, got %s", errorContains, err)
 	}
@@ -3925,7 +3946,9 @@ func TestDuplicateAttributesCSR(t *testing.T) {
 	}
 }
 
-func TestCertificateOIDPolicies(t *testing.T) {
+func TestCertificateOIDPoliciesGODEBUG(t *testing.T) {
+	t.Setenv("GODEBUG", "x509usepolicies=0")
+
 	template := Certificate{
 		SerialNumber:      big.NewInt(1),
 		Subject:           pkix.Name{CommonName: "Cert"},
@@ -3939,7 +3962,7 @@ func TestCertificateOIDPolicies(t *testing.T) {
 	}
 
 	var expectPolicies = []OID{
-		mustNewOIDFromInts(t, []uint64{1, 2, 3}),
+		mustNewOIDFromInts([]uint64{1, 2, 3}),
 	}
 
 	certDER, err := CreateCertificate(rand.Reader, &template, &template, rsaPrivateKey.Public(), rsaPrivateKey)
@@ -3961,17 +3984,21 @@ func TestCertificateOIDPolicies(t *testing.T) {
 	}
 }
 
-func TestCertificatePoliciesGODEBUG(t *testing.T) {
+func TestCertificatePolicies(t *testing.T) {
+	if x509usepolicies.Value() == "0" {
+		t.Skip("test relies on default x509usepolicies GODEBUG")
+	}
+
 	template := Certificate{
 		SerialNumber:      big.NewInt(1),
 		Subject:           pkix.Name{CommonName: "Cert"},
 		NotBefore:         time.Unix(1000, 0),
 		NotAfter:          time.Unix(100000, 0),
 		PolicyIdentifiers: []asn1.ObjectIdentifier{[]int{1, 2, 3}},
-		Policies:          []OID{mustNewOIDFromInts(t, []uint64{1, 2, math.MaxUint32 + 1})},
+		Policies:          []OID{mustNewOIDFromInts([]uint64{1, 2, math.MaxUint32 + 1})},
 	}
 
-	expectPolicies := []OID{mustNewOIDFromInts(t, []uint64{1, 2, 3})}
+	expectPolicies := []OID{mustNewOIDFromInts([]uint64{1, 2, math.MaxUint32 + 1})}
 	certDER, err := CreateCertificate(rand.Reader, &template, &template, rsaPrivateKey.Public(), rsaPrivateKey)
 	if err != nil {
 		t.Fatalf("CreateCertificate() unexpected error: %v", err)
@@ -3987,7 +4014,7 @@ func TestCertificatePoliciesGODEBUG(t *testing.T) {
 	}
 
 	t.Setenv("GODEBUG", "x509usepolicies=1")
-	expectPolicies = []OID{mustNewOIDFromInts(t, []uint64{1, 2, math.MaxUint32 + 1})}
+	expectPolicies = []OID{mustNewOIDFromInts([]uint64{1, 2, math.MaxUint32 + 1})}
 
 	certDER, err = CreateCertificate(rand.Reader, &template, &template, rsaPrivateKey.Public(), rsaPrivateKey)
 	if err != nil {

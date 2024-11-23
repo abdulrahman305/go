@@ -21,8 +21,11 @@ lable2:
 	MOVW	$65536, R4		// 04020014
 	MOVW	$4096, R4		// 24000014
 	MOVV	$65536, R4		// 04020014
+	MOVB	R4, R5			// 855c0000
+	MOVH	R4, R5			// 85580000
 	MOVV	$4096, R4		// 24000014
 	MOVW	R4, R5			// 85001700
+	MOVWU	R4, R5			// 8500df00
 	MOVV	R4, R5			// 85001500
 	MOVBU	R4, R5			// 85fc4303
 	SUB	R4, R5, R6		// a6101100
@@ -49,8 +52,26 @@ lable2:
 	SLLV	R4, R5, R6		// a6901800
 	ROTRV	R4, R5			// a5901b00
 	ROTRV	R4, R5, R6		// a6901b00
-	CLO	R4, R5			// 85100000
-	CLZ	R4, R5			// 85140000
+	CLOW	R4, R5			// 85100000
+	CLZW	R4, R5			// 85140000
+	CTOW	R4, R5			// 85180000
+	CTZW	R4, R5			// 851c0000
+	CLOV	R4, R5			// 85200000
+	CLZV	R4, R5			// 85240000
+	CTOV	R4, R5			// 85280000
+	CTZV	R4, R5			// 852c0000
+	REVB2H	R4, R5			// 85300000
+	REVB4H	R4, R5			// 85340000
+	REVB2W	R4, R5			// 85380000
+	REVBV	R4, R5			// 853c0000
+	REVH2W	R4, R5			// 85400000
+	REVHV	R4, R5			// 85440000
+	BITREV4B	R4, R5		// 85480000
+	BITREVW	R4, R5			// 85500000
+	BITREV8B	R4, R5		// 854c0000
+	BITREVV	R4, R5			// 85540000
+	EXTWB	R4, R5			// 855c0000
+	EXTWH	R4, R5			// 85580000
 	CPUCFG	R4, R5			// 856c0000
 	ADDF	F4, F5			// a5900001
 	ADDF	F4, F5, F6		// a6900001
@@ -190,6 +211,16 @@ lable2:
 	MASKEQZ	R4, R5, R6		// a6101300
 	MASKNEZ	R4, R5, R6		// a6901300
 
+	// CRC32
+	CRCWBW	R4, R5, R6		// a6102400
+	CRCWHW	R4, R5, R6		// a6902400
+	CRCWWW	R4, R5, R6		// a6102500
+	CRCWVW	R4, R5, R6		// a6902500
+	CRCCWBW	R4, R5, R6		// a6102600
+	CRCCWHW	R4, R5, R6		// a6902600
+	CRCCWWW	R4, R5, R6		// a6102700
+	CRCCWVW	R4, R5, R6		// a6902700
+
 	MOVFD	F4, F5			// 85241901
 	MOVDF	F4, F5			// 85181901
 	MOVWF	F4, F5			// 85101d01
@@ -275,6 +306,23 @@ lable2:
 	AMMINDBWU	R14, (R13), R12 // ac397138
 	AMMINDBVU	R14, (R13), R12 // acb97138
 
+	FMADDF	F2, F14, F9, F16	// 30391108
+	FMADDD	F11, F20, F23, F12	// ecd22508
+	FMSUBF	F3, F11, F31, F22	// f6af5108
+	FMSUBD	F13, F30, F9, F15	// 2ff96608
+	FNMADDF	F27, F11, F5, F21	// b5ac9d08
+	FNMADDD	F29, F14, F27, F6	// 66bbae08
+	FNMSUBF	F17, F8, F12, F8	// 88a1d808
+	FNMSUBD	F29, F21, F3, F17	// 71d4ee08
+	FMADDF	F2, F14, F9		// 29391108
+	FMADDD	F11, F20, F23		// f7d22508
+	FMSUBF	F3, F11, F31		// ffaf5108
+	FMSUBD	F13, F30, F9		// 29f96608
+	FNMADDF	F27, F11, F5		// a5ac9d08
+	FNMADDD	F29, F14, F27		// 7bbbae08
+	FNMSUBF	F17, F8, F12		// 8ca1d808
+	FNMSUBD	F29, F21, F3		// 63d4ee08
+
 	FMINF	F4, F5, F6		// a6900a01
 	FMINF	F4, F5			// a5900a01
 	FMIND	F4, F5, F6		// a6100b01
@@ -356,3 +404,115 @@ lable2:
 	FSCALEBD	F4, F5, F6	// a6101101
 	FLOGBF		F4, F5		// 85241401
 	FLOGBD		F4, F5		// 85281401
+
+	// VSTX/VLDX/XVSTX/XVLDX instructions
+	VMOVQ		V2, (R5)(R5)    // a2144438
+	VMOVQ		(R4)(R5), V2    // 82144038
+	XVMOVQ		X2, (R4)(R5)    // 82144c38
+	XVMOVQ		(R4)(R5), X2    // 82144838
+
+	// VST/VLD/XVST/XVLD instructions
+	VMOVQ		V2, (R4)        // 8200402c
+	VMOVQ		V2, 3(R4)       // 820c402c
+	VMOVQ		V2, 2040(R4)    // 82e05f2c
+	VMOVQ		V2, -2040(R4)   // 8220602c
+	VMOVQ		V2, y+16(FP)    // 0260402c
+	VMOVQ		V2, x+2030(FP)  // 02d85f2c
+	VMOVQ		(R4), V2        // 8200002c
+	VMOVQ		3(R4), V2       // 820c002c
+	VMOVQ		2044(R4), V2    // 82f01f2c
+	VMOVQ		-2044(R4), V2   // 8210202c
+	VMOVQ		y+16(FP), V2    // 0260002c
+	VMOVQ		x+2030(FP), V2  // 02d81f2c
+	XVMOVQ		X2, (R4)        // 8200c02c
+	XVMOVQ		X3, 3(R4)       // 830cc02c
+	XVMOVQ		X4, 2040(R4)    // 84e0df2c
+	XVMOVQ		X5, -2040(R4)   // 8520e02c
+	XVMOVQ		X6, y+16(FP)    // 0660c02c
+	XVMOVQ		X7, x+2030(FP)  // 07d8df2c
+	XVMOVQ		(R4), X2        // 8200802c
+	XVMOVQ		3(R4), X3       // 830c802c
+	XVMOVQ		2044(R4), X4    // 84f09f2c
+	XVMOVQ		-2044(R4), X5   // 8510a02c
+	XVMOVQ		y+16(FP), X6    // 0660802c
+	XVMOVQ		x+2030(FP), X7  // 07d89f2c
+
+	// Move vector element to general-purpose register: VMOVQ  <Vn>.<T>[index], Rd
+	VMOVQ		V0.B[0], R4     // 0480ef72
+	VMOVQ		V3.B[3], R5     // 658cef72
+	VMOVQ		V4.H[2], R6     // 86c8ef72
+	VMOVQ		V5.W[2], R7     // a7e8ef72
+	VMOVQ		V6.V[1], R8     // c8f4ef72
+	VMOVQ		V7.BU[0], R4    // e480f372
+	VMOVQ		V7.BU[1], R4    // e484f372
+	VMOVQ		V9.BU[3], R5    // 258df372
+	VMOVQ		V10.HU[2], R6   // 46c9f372
+	VMOVQ		V11.WU[2], R7   // 67e9f372
+	VMOVQ		V31.VU[1], R8   // e8f7f372
+	XVMOVQ		X1.W[2], R7     // 27c8ef76
+	XVMOVQ		X6.V[2], R8     // c8e8ef76
+	XVMOVQ		X8.WU[2], R7    // 07c9f376
+	XVMOVQ		X31.VU[2], R8   // e8ebf376
+
+	// Move general-purpose register to a vector element: VMOVQ  Rn, <Vd>.<T>[index]
+	VMOVQ		R4, V2.B[0]     // 8280eb72
+	VMOVQ		R4, V3.B[1]     // 8384eb72
+	VMOVQ		R5, V4.B[3]     // a48ceb72
+	VMOVQ		R6, V5.H[2]     // c5c8eb72
+	VMOVQ		R7, V6.W[2]     // e6e8eb72
+	VMOVQ		R8, V7.V[1]     // 07f5eb72
+	XVMOVQ		R7, X9.W[2]     // e9c8eb76
+	XVMOVQ		R8, X10.V[2]    // 0ae9eb76
+
+	// Duplicate general-purpose register to vector
+	VMOVQ		R4, V2.B16      // 82009f72
+	VMOVQ		R5, V3.H8       // a3049f72
+	VMOVQ		R6, V4.W4       // c4089f72
+	VMOVQ		R7, V5.V2       // e50c9f72
+	XVMOVQ		R16, X31.B32    // 1f029f76
+	XVMOVQ		R17, X28.H16    // 3c069f76
+	XVMOVQ		R18, X10.W8     // 4a0a9f76
+	XVMOVQ		R19, X9.V4      // 690e9f76
+
+	// Move vector
+	XVMOVQ		X0, X31.B32     // 1f000777
+	XVMOVQ		X1, X30.H16     // 3e800777
+	XVMOVQ		X2, X29.W8      // 5dc00777
+	XVMOVQ		X3, X28.V4      // 7ce00777
+	XVMOVQ		X3, X27.Q2      // 7bf00777
+
+	// Move vector element to scalar.
+	XVMOVQ		X0, X31.W[7]    // 1fdcff76
+	XVMOVQ		X1, X29.W[0]    // 3dc0ff76
+	XVMOVQ		X3, X28.V[3]    // 7cecff76
+	XVMOVQ		X4, X27.V[0]    // 9be0ff76
+	XVMOVQ		X31.W[7], X0    // e0df0377
+	XVMOVQ		X29.W[0], X1    // a1c30377
+	XVMOVQ		X28.V[3], X8    // 88ef0377
+	XVMOVQ		X27.V[0], X9    // 69e30377
+
+	//Move vector element to vector.
+	VMOVQ		V1.B[3], V9.B16 // 298cf772
+	VMOVQ		V2.H[2], V8.H8  // 48c8f772
+	VMOVQ		V3.W[1], V7.W4  // 67e4f772
+	VMOVQ		V4.V[0], V6.V2  // 86f0f772
+
+	// VSEQ{B,H,W,V}, XVSEQ{B,H,W,V} instruction
+	VSEQB		V1, V2, V3      // 43040070
+	VSEQH		V1, V2, V3      // 43840070
+	VSEQW		V1, V2, V3      // 43040170
+	VSEQV		V1, V2, V3      // 43840170
+	XVSEQB		X3, X2, X4      // 440c0074
+	XVSEQH		X3, X2, X4      // 448c0074
+	XVSEQW		X3, X2, X4      // 440c0174
+	XVSEQV		X3, X2, X4      // 448c0174
+
+	// VPCNT{B,H,W,V}, XVPCNT{B,H,W,V} instruction
+	VPCNTB		V1, V2          // 22209c72
+	VPCNTH		V1, V2          // 22249c72
+	VPCNTW		V1, V2          // 22289c72
+	VPCNTV		V1, V2          // 222c9c72
+	XVPCNTB		X3, X2          // 62209c76
+	XVPCNTH		X3, X2          // 62249c76
+	XVPCNTW		X3, X2          // 62289c76
+	XVPCNTV		X3, X2          // 622c9c76

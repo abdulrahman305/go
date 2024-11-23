@@ -810,7 +810,7 @@ func (s *state) evalCall(dot, fun reflect.Value, isBuiltin bool, node parse.Node
 				return v
 			}
 		}
-		if final != missingVal {
+		if !final.Equal(missingVal) {
 			// The last argument to and/or is coming from
 			// the pipeline. We didn't short circuit on an earlier
 			// argument, so we are going to return this one.
@@ -856,7 +856,13 @@ func (s *state) evalCall(dot, fun reflect.Value, isBuiltin bool, node parse.Node
 	// Special case for the "call" builtin.
 	// Insert the name of the callee function as the first argument.
 	if isBuiltin && name == "call" {
-		calleeName := args[0].String()
+		var calleeName string
+		if len(args) == 0 {
+			// final must be present or we would have errored out above.
+			calleeName = final.String()
+		} else {
+			calleeName = args[0].String()
+		}
 		argv = append([]reflect.Value{reflect.ValueOf(calleeName)}, argv...)
 		fun = reflect.ValueOf(call)
 	}
