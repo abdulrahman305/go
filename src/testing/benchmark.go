@@ -275,6 +275,11 @@ func (b *B) doBench() BenchmarkResult {
 }
 
 func predictN(goalns int64, prevIters int64, prevns int64, last int64) int {
+	if prevns == 0 {
+		// Round up to dodge divide by zero. See https://go.dev/issue/70709.
+		prevns = 1
+	}
+
 	// Order of operations matters.
 	// For very fast benchmarks, prevIters ~= prevns.
 	// If you divide first, you get 0 or 1,
@@ -321,12 +326,7 @@ func (b *B) launch() {
 				// Predict required iterations.
 				goalns := d.Nanoseconds()
 				prevIters := int64(b.N)
-				prevns := b.duration.Nanoseconds()
-				if prevns <= 0 {
-					// Round up, to avoid div by zero.
-					prevns = 1
-				}
-				n = int64(predictN(goalns, prevIters, prevns, last))
+				n = int64(predictN(goalns, prevIters, b.duration.Nanoseconds(), last))
 				b.runN(int(n))
 			}
 		}
@@ -405,6 +405,22 @@ func (b *B) loopSlowPath() bool {
 // A benchmark should either use Loop or contain an explicit loop from 0 to b.N, but not both.
 // After the benchmark finishes, b.N will contain the total number of calls to op, so the benchmark
 // may use b.N to compute other average metrics.
+//
+// The parameters and results of function calls inside the body of "for b.Loop() {...}" are guaranteed
+// not to be optimized away.
+// Also, the local loop scaling for b.Loop ensures the benchmark function containing the loop will only
+// be executed once, i.e. for such construct:
+//
+//	testing.Benchmark(func(b *testing.B) {
+//			...(setup)
+//			for b.Loop() {
+//				...(benchmark logic)
+//			}
+//			...(clean-up)
+//	}
+//
+// The ...(setup) and ...(clean-up) logic will only be executed once.
+// Also benchtime=Nx (N>1) will result in exactly N executions instead of N+1 for b.N style loops.
 func (b *B) Loop() bool {
 	if b.loopN != 0 && b.loopN < b.N {
 		b.loopN++

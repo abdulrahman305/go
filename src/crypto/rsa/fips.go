@@ -17,6 +17,9 @@ import (
 const (
 	// PSSSaltLengthAuto causes the salt in a PSS signature to be as large
 	// as possible when signing, and to be auto-detected when verifying.
+	//
+	// When signing in FIPS 140-3 mode, the salt length is capped at the length
+	// of the hash function used in the signature.
 	PSSSaltLengthAuto = 0
 	// PSSSaltLengthEqualsHash causes the salt length to equal the length
 	// of the hash used in the signature.
@@ -66,6 +69,9 @@ func SignPSS(rand io.Reader, priv *PrivateKey, hash crypto.Hash, digest []byte, 
 	}
 	if fips140only.Enabled && !fips140only.ApprovedHash(hash.New()) {
 		return nil, errors.New("crypto/rsa: use of hash functions other than SHA-2 or SHA-3 is not allowed in FIPS 140-only mode")
+	}
+	if fips140only.Enabled && !fips140only.ApprovedRandomReader(rand) {
+		return nil, errors.New("crypto/rsa: only crypto/rand.Reader is allowed in FIPS 140-only mode")
 	}
 
 	if opts != nil && opts.Hash != 0 {
@@ -188,6 +194,9 @@ func EncryptOAEP(hash hash.Hash, random io.Reader, pub *PublicKey, msg []byte, l
 	if fips140only.Enabled && !fips140only.ApprovedHash(hash) {
 		return nil, errors.New("crypto/rsa: use of hash functions other than SHA-2 or SHA-3 is not allowed in FIPS 140-only mode")
 	}
+	if fips140only.Enabled && !fips140only.ApprovedRandomReader(random) {
+		return nil, errors.New("crypto/rsa: only crypto/rand.Reader is allowed in FIPS 140-only mode")
+	}
 
 	defer hash.Reset()
 
@@ -278,6 +287,14 @@ func decryptOAEP(hash, mgfHash hash.Hash, priv *PrivateKey, ciphertext []byte, l
 // messages to signatures and identify the signed messages. As ever,
 // signatures provide authenticity, not confidentiality.
 func SignPKCS1v15(random io.Reader, priv *PrivateKey, hash crypto.Hash, hashed []byte) ([]byte, error) {
+	var hashName string
+	if hash != crypto.Hash(0) {
+		if len(hashed) != hash.Size() {
+			return nil, errors.New("crypto/rsa: input must be hashed message")
+		}
+		hashName = hash.String()
+	}
+
 	if err := checkPublicKeySize(&priv.PublicKey); err != nil {
 		return nil, err
 	}
@@ -299,13 +316,6 @@ func SignPKCS1v15(random io.Reader, priv *PrivateKey, hash crypto.Hash, hashed [
 	k, err := fipsPrivateKey(priv)
 	if err != nil {
 		return nil, err
-	}
-	var hashName string
-	if hash != crypto.Hash(0) {
-		if len(hashed) != hash.Size() {
-			return nil, errors.New("crypto/rsa: input must be hashed message")
-		}
-		hashName = hash.String()
 	}
 	return fipsError2(rsa.SignPKCS1v15(k, hashName, hashed))
 }
@@ -380,8 +390,8 @@ func checkFIPS140OnlyPublicKey(pub *PublicKey) error {
 	if pub.N.BitLen() < 2048 {
 		return errors.New("crypto/rsa: use of keys smaller than 2048 bits is not allowed in FIPS 140-only mode")
 	}
-	if pub.N.BitLen() > 16384 {
-		return errors.New("crypto/rsa: use of keys larger than 16384 bits is not allowed in FIPS 140-only mode")
+	if pub.N.BitLen()%2 == 1 {
+		return errors.New("crypto/rsa: use of keys with odd size is not allowed in FIPS 140-only mode")
 	}
 	if pub.E <= 1<<16 {
 		return errors.New("crypto/rsa: use of public exponent <= 2¹⁶ is not allowed in FIPS 140-only mode")
@@ -399,8 +409,11 @@ func checkFIPS140OnlyPrivateKey(priv *PrivateKey) error {
 	if err := checkFIPS140OnlyPublicKey(&priv.PublicKey); err != nil {
 		return err
 	}
-	if len(priv.Primes) > 2 {
+	if len(priv.Primes) != 2 {
 		return errors.New("crypto/rsa: use of multi-prime keys is not allowed in FIPS 140-only mode")
+	}
+	if priv.Primes[0] == nil || priv.Primes[1] == nil || priv.Primes[0].BitLen() != priv.Primes[1].BitLen() {
+		return errors.New("crypto/rsa: use of primes of different sizes is not allowed in FIPS 140-only mode")
 	}
 	return nil
 }
