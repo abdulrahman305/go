@@ -10,6 +10,7 @@ import (
 	"crypto"
 	"crypto/internal/fips140/sha3"
 	"hash"
+	_ "unsafe"
 )
 
 func init() {
@@ -100,6 +101,11 @@ type SHA3 struct {
 	s sha3.Digest
 }
 
+//go:linkname fips140hash_sha3Unwrap crypto/internal/fips140hash.sha3Unwrap
+func fips140hash_sha3Unwrap(sha3 *SHA3) *sha3.Digest {
+	return &sha3.s
+}
+
 // New224 creates a new SHA3-224 hash.
 func New224() *SHA3 {
 	return &SHA3{*sha3.New224()}
@@ -158,6 +164,12 @@ func (s *SHA3) AppendBinary(p []byte) ([]byte, error) {
 // UnmarshalBinary implements [encoding.BinaryUnmarshaler].
 func (s *SHA3) UnmarshalBinary(data []byte) error {
 	return s.s.UnmarshalBinary(data)
+}
+
+// Clone implements [hash.Cloner].
+func (d *SHA3) Clone() (hash.Cloner, error) {
+	r := *d
+	return &r, nil
 }
 
 // SHAKE is an instance of a SHAKE extendable output function.

@@ -37,6 +37,7 @@ TEXT runtime·rt0_go(SB),NOSPLIT|TOPFRAME,$0
 	JAL	(R25)
 
 nocgo:
+	JAL	runtime·save_g(SB)
 	// update stackguard after _cgo_init
 	MOVV	(g_stack+stack_lo)(g), R19
 	ADDV	$const_stackGuard, R19
@@ -69,8 +70,9 @@ nocgo:
 	// start this M
 	JAL	runtime·mstart(SB)
 
-	// Prevent dead-code elimination of debugCallV2, which is
+	// Prevent dead-code elimination of debugCallV2 and debugPinnerV1, which are
 	// intended to be called by debuggers.
+	MOVV	$runtime·debugPinnerV1<ABIInternal>(SB), R0
 	MOVV	$runtime·debugCallV2<ABIInternal>(SB), R0
 
 	MOVV	R0, 1(R0)
@@ -113,10 +115,8 @@ TEXT gogo<>(SB), NOSPLIT|NOFRAME, $0
 
 	MOVV	gobuf_sp(R4), R3
 	MOVV	gobuf_lr(R4), R1
-	MOVV	gobuf_ret(R4), R19
 	MOVV	gobuf_ctxt(R4), REGCTXT
 	MOVV	R0, gobuf_sp(R4)
-	MOVV	R0, gobuf_ret(R4)
 	MOVV	R0, gobuf_lr(R4)
 	MOVV	R0, gobuf_ctxt(R4)
 	MOVV	gobuf_pc(R4), R6
@@ -468,7 +468,6 @@ TEXT gosave_systemstack_switch<>(SB),NOSPLIT|NOFRAME,$0
 	MOVV	R19, (g_sched+gobuf_pc)(g)
 	MOVV	R3, (g_sched+gobuf_sp)(g)
 	MOVV	R0, (g_sched+gobuf_lr)(g)
-	MOVV	R0, (g_sched+gobuf_ret)(g)
 	// Assert ctxt is zero. See func save.
 	MOVV	(g_sched+gobuf_ctxt)(g), R19
 	BEQ	R19, 2(PC)
@@ -659,9 +658,9 @@ TEXT runtime·setg(SB), NOSPLIT, $0-8
 	JAL	runtime·save_g(SB)
 	RET
 
-// void setg_gcc(G*); set g called from gcc with g in R19
+// void setg_gcc(G*); set g called from gcc with g in R4
 TEXT setg_gcc<>(SB),NOSPLIT,$0-0
-	MOVV	R19, g
+	MOVV	R4, g
 	JAL	runtime·save_g(SB)
 	RET
 
@@ -678,10 +677,6 @@ TEXT runtime·memhash32<ABIInternal>(SB),NOSPLIT|NOFRAME,$0-24
 	JMP	runtime·memhash32Fallback<ABIInternal>(SB)
 TEXT runtime·memhash64<ABIInternal>(SB),NOSPLIT|NOFRAME,$0-24
 	JMP	runtime·memhash64Fallback<ABIInternal>(SB)
-
-TEXT runtime·return0(SB), NOSPLIT, $0
-	MOVW	$0, R19
-	RET
 
 // Called from cgo wrappers, this function returns g->m->curg.stack.hi.
 // Must obey the gcc calling convention.
@@ -1141,76 +1136,29 @@ TEXT runtime·debugCallPanicked(SB),NOSPLIT,$16-16
 	BREAK
 	RET
 
-// Note: these functions use a special calling convention to save generated code space.
-// Arguments are passed in registers, but the space for those arguments are allocated
-// in the caller's stack frame. These stubs write the args into that stack space and
-// then tail call to the corresponding runtime handler.
-// The tail call makes these stubs disappear in backtraces.
-TEXT runtime·panicIndex<ABIInternal>(SB),NOSPLIT,$0-16
-	MOVV	R20, R4
-	MOVV	R21, R5
-	JMP	runtime·goPanicIndex<ABIInternal>(SB)
-TEXT runtime·panicIndexU<ABIInternal>(SB),NOSPLIT,$0-16
-	MOVV	R20, R4
-	MOVV	R21, R5
-	JMP	runtime·goPanicIndexU<ABIInternal>(SB)
-TEXT runtime·panicSliceAlen<ABIInternal>(SB),NOSPLIT,$0-16
-	MOVV	R21, R4
-	MOVV	R23, R5
-	JMP	runtime·goPanicSliceAlen<ABIInternal>(SB)
-TEXT runtime·panicSliceAlenU<ABIInternal>(SB),NOSPLIT,$0-16
-	MOVV	R21, R4
-	MOVV	R23, R5
-	JMP	runtime·goPanicSliceAlenU<ABIInternal>(SB)
-TEXT runtime·panicSliceAcap<ABIInternal>(SB),NOSPLIT,$0-16
-	MOVV	R21, R4
-	MOVV	R23, R5
-	JMP	runtime·goPanicSliceAcap<ABIInternal>(SB)
-TEXT runtime·panicSliceAcapU<ABIInternal>(SB),NOSPLIT,$0-16
-	MOVV	R21, R4
-	MOVV	R23, R5
-	JMP	runtime·goPanicSliceAcapU<ABIInternal>(SB)
-TEXT runtime·panicSliceB<ABIInternal>(SB),NOSPLIT,$0-16
-	MOVV	R20, R4
-	MOVV	R21, R5
-	JMP	runtime·goPanicSliceB<ABIInternal>(SB)
-TEXT runtime·panicSliceBU<ABIInternal>(SB),NOSPLIT,$0-16
-	MOVV	R20, R4
-	MOVV	R21, R5
-	JMP	runtime·goPanicSliceBU<ABIInternal>(SB)
-TEXT runtime·panicSlice3Alen<ABIInternal>(SB),NOSPLIT,$0-16
-	MOVV	R23, R4
-	MOVV	R24, R5
-	JMP	runtime·goPanicSlice3Alen<ABIInternal>(SB)
-TEXT runtime·panicSlice3AlenU<ABIInternal>(SB),NOSPLIT,$0-16
-	MOVV	R23, R4
-	MOVV	R24, R5
-	JMP	runtime·goPanicSlice3AlenU<ABIInternal>(SB)
-TEXT runtime·panicSlice3Acap<ABIInternal>(SB),NOSPLIT,$0-16
-	MOVV	R23, R4
-	MOVV	R24, R5
-	JMP	runtime·goPanicSlice3Acap<ABIInternal>(SB)
-TEXT runtime·panicSlice3AcapU<ABIInternal>(SB),NOSPLIT,$0-16
-	MOVV	R23, R4
-	MOVV	R24, R5
-	JMP	runtime·goPanicSlice3AcapU<ABIInternal>(SB)
-TEXT runtime·panicSlice3B<ABIInternal>(SB),NOSPLIT,$0-16
-	MOVV	R21, R4
-	MOVV	R23, R5
-	JMP	runtime·goPanicSlice3B<ABIInternal>(SB)
-TEXT runtime·panicSlice3BU<ABIInternal>(SB),NOSPLIT,$0-16
-	MOVV	R21, R4
-	MOVV	R23, R5
-	JMP	runtime·goPanicSlice3BU<ABIInternal>(SB)
-TEXT runtime·panicSlice3C<ABIInternal>(SB),NOSPLIT,$0-16
-	MOVV	R20, R4
-	MOVV	R21, R5
-	JMP	runtime·goPanicSlice3C<ABIInternal>(SB)
-TEXT runtime·panicSlice3CU<ABIInternal>(SB),NOSPLIT,$0-16
-	MOVV	R20, R4
-	MOVV	R21, R5
-	JMP	runtime·goPanicSlice3CU<ABIInternal>(SB)
-TEXT runtime·panicSliceConvert<ABIInternal>(SB),NOSPLIT,$0-16
-	MOVV	R23, R4
-	MOVV	R24, R5
-	JMP	runtime·goPanicSliceConvert<ABIInternal>(SB)
+TEXT runtime·panicBounds<ABIInternal>(SB),NOSPLIT,$144-0
+	NO_LOCAL_POINTERS
+	// Save all 16 int registers that could have an index in them.
+	// They may be pointers, but if they are they are dead.
+	// Skip R0 aka ZERO, R1 aka LR, R2 aka thread pointer, R3 aka SP.
+	MOVV	R4, 24(R3)
+	MOVV	R5, 32(R3)
+	MOVV	R6, 40(R3)
+	MOVV	R7, 48(R3)
+	MOVV	R8, 56(R3)
+	MOVV	R9, 64(R3)
+	MOVV	R10, 72(R3)
+	MOVV	R11, 80(R3)
+	MOVV	R12, 88(R3)
+	MOVV	R13, 96(R3)
+	MOVV	R14, 104(R3)
+	MOVV	R15, 112(R3)
+	MOVV	R16, 120(R3)
+	MOVV	R17, 128(R3)
+	MOVV	R18, 136(R3)
+	MOVV	R19, 144(R3)
+
+	MOVV	R1, R4		// PC immediately after call to panicBounds
+	ADDV	$24, R3, R5	// pointer to save area
+	CALL	runtime·panicBounds64<ABIInternal>(SB)
+	RET

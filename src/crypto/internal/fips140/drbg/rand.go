@@ -2,6 +2,10 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// Package drbg provides cryptographically secure random bytes
+// usable by FIPS code. In FIPS mode it uses an SP 800-90A Rev. 1
+// Deterministic Random Bit Generator (DRBG). Otherwise,
+// it uses the operating system's random number generator.
 package drbg
 
 import (
@@ -13,8 +17,15 @@ import (
 	"sync"
 )
 
-var mu sync.Mutex
-var drbg *Counter
+var drbgs = sync.Pool{
+	New: func() any {
+		var c *Counter
+		entropy.Depleted(func(seed *[48]byte) {
+			c = NewCounter(seed)
+		})
+		return c
+	},
+}
 
 // Read fills b with cryptographically secure random bytes. In FIPS mode, it
 // uses an SP 800-90A Rev. 1 Deterministic Random Bit Generator (DRBG).
@@ -33,14 +44,8 @@ func Read(b []byte) {
 	additionalInput := new([SeedSize]byte)
 	sysrand.Read(additionalInput[:16])
 
-	mu.Lock()
-	defer mu.Unlock()
-
-	if drbg == nil {
-		entropy.Depleted(func(seed *[48]byte) {
-			drbg = NewCounter(seed)
-		})
-	}
+	drbg := drbgs.Get().(*Counter)
+	defer drbgs.Put(drbg)
 
 	for len(b) > 0 {
 		size := min(len(b), maxRequestSize)

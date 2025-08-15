@@ -17,9 +17,11 @@ information on how to use it see the cgo documentation (go doc cmd/cgo).
 
 The second is the SWIG program, which is a general tool for
 interfacing between languages. For information on SWIG see
-http://swig.org/. When running go build, any file with a .swig
+https://swig.org/. When running go build, any file with a .swig
 extension will be passed to SWIG. Any file with a .swigcxx extension
-will be passed to SWIG with the -c++ option.
+will be passed to SWIG with the -c++ option. A package can't be just
+a .swig or .swigcxx file; there must be at least one .go file, even if
+it has just a package clause.
 
 When either cgo or SWIG is used, go build will pass any .c, .m, .s, .S
 or .sx files to the C compiler, and any .cc, .cpp, .cxx files to the C++
@@ -214,12 +216,12 @@ For example,
 	import "example.org/user/foo.hg"
 
 denotes the root directory of the Mercurial repository at
-example.org/user/foo or foo.hg, and
+example.org/user/foo, and
 
 	import "example.org/repo.git/foo/bar"
 
 denotes the foo/bar directory of the Git repository at
-example.org/repo or repo.git.
+example.org/repo.
 
 When a version control system supports multiple protocols,
 each is tried in turn when downloading. For example, a Git
@@ -239,6 +241,11 @@ The meta tag has the form:
 
 	<meta name="go-import" content="import-prefix vcs repo-root">
 
+Starting in Go 1.25, an optional subdirectory will be recognized by the
+go command:
+
+	<meta name="go-import" content="import-prefix vcs repo-root subdir">
+
 The import-prefix is the import path corresponding to the repository
 root. It must be a prefix or an exact match of the package being
 fetched with "go get". If it's not an exact match, another http
@@ -252,6 +259,12 @@ The vcs is one of "bzr", "fossil", "git", "hg", "svn".
 
 The repo-root is the root of the version control system
 containing a scheme and not containing a .vcs qualifier.
+
+The subdir specifies the directory within the repo-root where the
+Go module's root (including its go.mod file) is located. It allows
+you to organize your repository with the Go module code in a subdirectory
+rather than directly at the repository's root.
+If set, all vcs tags must be prefixed with "subdir". i.e. "subdir/v1.2.3"
 
 For example,
 
@@ -267,14 +280,17 @@ If that page contains the meta tag
 	<meta name="go-import" content="example.org git https://code.org/r/p/exproj">
 
 the go tool will verify that https://example.org/?go-get=1 contains the
-same meta tag and then git clone https://code.org/r/p/exproj into
-GOPATH/src/example.org.
+same meta tag and then download the code from the Git repository at https://code.org/r/p/exproj
 
-When using GOPATH, downloaded packages are written to the first directory
-listed in the GOPATH environment variable.
-(See 'go help gopath-get' and 'go help gopath'.)
+If that page contains the meta tag
 
-When using modules, downloaded packages are stored in the module cache.
+	<meta name="go-import" content="example.org git https://code.org/r/p/exproj foo/subdir">
+
+the go tool will verify that https://example.org/?go-get=1 contains the same meta
+tag and then download the code from the "foo/subdir" subdirectory within the Git repository
+at https://code.org/r/p/exproj
+
+Downloaded packages are stored in the module cache.
 See https://golang.org/ref/mod#module-cache.
 
 When using modules, an additional variant of the go-import meta tag is
@@ -509,10 +525,15 @@ General-purpose environment variables:
 		The directory where 'go install' will install a command.
 	GOCACHE
 		The directory where the go command will store cached
-		information for reuse in future builds.
+		information for reuse in future builds. Must be an absolute path.
+	GOCACHEPROG
+		A command (with optional space-separated flags) that implements an
+		external go command build cache.
+		See 'go doc cmd/go/internal/cacheprog'.
 	GODEBUG
-		Enable various debugging facilities. See https://go.dev/doc/godebug
-		for details.
+		Enable various debugging facilities for programs built with Go,
+		including the go command. Cannot be set using 'go env -w'.
+		See https://go.dev/doc/godebug for details.
 	GOENV
 		The location of the Go environment configuration file.
 		Cannot be set using 'go env -w'.
@@ -620,6 +641,11 @@ Architecture-specific environment variables:
 	GOARM
 		For GOARCH=arm, the ARM architecture for which to compile.
 		Valid values are 5, 6, 7.
+		When the Go tools are built on an arm system,
+		the default value is set based on what the build system supports.
+		When the Go tools are not built on an arm system
+		(that is, when building a cross-compiler),
+		the default value is 7.
 		The value can be followed by an option specifying how to implement floating point instructions.
 		Valid options are ,softfloat (default for 5) and ,hardfloat (default for 6 and 7).
 	GOARM64
@@ -640,8 +666,9 @@ Architecture-specific environment variables:
 		Valid values are power8 (default), power9, power10.
 	GORISCV64
 		For GOARCH=riscv64, the RISC-V user-mode application profile for which
-		to compile. Valid values are rva20u64 (default), rva22u64.
+		to compile. Valid values are rva20u64 (default), rva22u64, rva23u64.
 		See https://github.com/riscv/riscv-profiles/blob/main/src/profiles.adoc
+		and https://github.com/riscv/riscv-profiles/blob/main/src/rva23-profile.adoc
 	GOWASM
 		For GOARCH=wasm, comma-separated list of experimental WebAssembly features to use.
 		Valid values are satconv, signext.
@@ -651,7 +678,6 @@ Environment variables for use with code coverage:
 	GOCOVERDIR
 		Directory into which to write code coverage data files
 		generated by running a "go build -cover" binary.
-		Requires that GOEXPERIMENT=coverageredesign is enabled.
 
 Special-purpose environment variables:
 
@@ -669,7 +695,7 @@ Special-purpose environment variables:
 		The default is GOFIPS140=off, which makes no FIPS-140 changes at all.
 		Other values enable FIPS-140 compliance measures and select alternate
 		versions of the cryptography source code.
-		See https://go.dev/security/fips140 for details.
+		See https://go.dev/doc/security/fips140 for details.
 	GO_EXTLINK_ENABLED
 		Whether the linker should use external linking mode
 		when using -linkmode=auto with code that uses cgo.
@@ -946,8 +972,8 @@ The defined architecture feature build tags are:
 	  (or ppc64le.power8, ppc64le.power9, and ppc64le.power10)
 	  feature build tags.
 	- For GOARCH=riscv64,
-	  GORISCV64=rva20u64 and rva22u64 correspond to the riscv64.rva20u64
-	  and riscv64.rva22u64 build tags.
+	  GORISCV64=rva20u64, rva22u64 and rva23u64 correspond to the riscv64.rva20u64,
+	  riscv64.rva22u64 and riscv64.rva23u64 build tags.
 	- For GOARCH=wasm, GOWASM=satconv and signext
 	  correspond to the wasm.satconv and wasm.signext feature build tags.
 
@@ -1019,7 +1045,7 @@ command
 		BlankLine     = '\n' .
 
 	Example:
-		https://example.com/
+		https://example.com
 		https://example.net/api/
 
 		Authorization: Basic <token>
@@ -1029,7 +1055,7 @@ command
 		Example: Data
 
 	If the server responds with any 4xx code, the go command will write the
-	following to the programs' stdin:
+	following to the program's stdin:
 		Response      = StatusLine { HeaderLine } BlankLine .
 		StatusLine    = Protocol Space Status '\n' .
 		Protocol      = /* HTTP protocol */ .
@@ -1044,8 +1070,7 @@ command
 		Content-Type: text/plain; charset=utf-8
 		Date: Thu, 07 Nov 2024 18:43:09 GMT
 
-	Note: at least for HTTP 1.1, the contents written to stdin can be parsed
-	as an HTTP response.
+	Note: it is safe to use net/http.ReadResponse to parse this input.
 
 Before the first HTTPS fetch, the go command will invoke each GOAUTH
 command in the list with no additional arguments and no input.
@@ -1097,7 +1122,7 @@ Furthermore, as with TestEvent, parsers can simply concatenate the Output
 fields of all events to reconstruct the text format output, as it would
 have appeared from go build without the -json flag.
 
-Note that there may also be non-JSON error text on stdnard error, even
+Note that there may also be non-JSON error text on standard error, even
 with the -json flag. Typically, this indicates an early, serious error.
 Consumers should be robust to this.
 	`,

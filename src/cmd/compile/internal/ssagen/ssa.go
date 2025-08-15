@@ -7,6 +7,7 @@ package ssagen
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"fmt"
 	"go/constant"
 	"html"
@@ -46,6 +47,11 @@ const ssaDumpFile = "ssa.html"
 
 // ssaDumpInlined holds all inlined functions when ssaDump contains a function name.
 var ssaDumpInlined []*ir.Func
+
+// Maximum size we will aggregate heap allocations of scalar locals.
+// Almost certainly can't hurt to be as big as the tiny allocator.
+// Might help to be a bit bigger.
+const maxAggregatedHeapAllocation = 16
 
 func DumpInline(fn *ir.Func) {
 	if ssaDump != "" && ssaDump == ir.FuncName(fn) {
@@ -88,12 +94,8 @@ func InitConfig() {
 	_ = types.NewPtr(types.Types[types.TINT16])                             // *int16
 	_ = types.NewPtr(types.Types[types.TINT64])                             // *int64
 	_ = types.NewPtr(types.ErrorType)                                       // *error
-	if buildcfg.Experiment.SwissMap {
-		_ = types.NewPtr(reflectdata.SwissMapType()) // *internal/runtime/maps.Map
-	} else {
-		_ = types.NewPtr(reflectdata.OldMapType()) // *runtime.hmap
-	}
-	_ = types.NewPtr(deferstruct()) // *runtime._defer
+	_ = types.NewPtr(reflectdata.MapType())                                 // *internal/runtime/maps.Map
+	_ = types.NewPtr(deferstruct())                                         // *runtime._defer
 	types.NewPtrCacheEnabled = false
 	ssaConfig = ssa.NewConfig(base.Ctxt.Arch.Name, *types_, base.Ctxt, base.Flag.N == 0, Arch.SoftFloat)
 	ssaConfig.Race = base.Flag.Race
@@ -122,6 +124,7 @@ func InitConfig() {
 	ir.Syms.Goschedguarded = typecheck.LookupRuntimeFunc("goschedguarded")
 	ir.Syms.Growslice = typecheck.LookupRuntimeFunc("growslice")
 	ir.Syms.InterfaceSwitch = typecheck.LookupRuntimeFunc("interfaceSwitch")
+	ir.Syms.MallocGC = typecheck.LookupRuntimeFunc("mallocgc")
 	ir.Syms.Memmove = typecheck.LookupRuntimeFunc("memmove")
 	ir.Syms.Msanread = typecheck.LookupRuntimeFunc("msanread")
 	ir.Syms.Msanwrite = typecheck.LookupRuntimeFunc("msanwrite")
@@ -130,6 +133,8 @@ func InitConfig() {
 	ir.Syms.Asanwrite = typecheck.LookupRuntimeFunc("asanwrite")
 	ir.Syms.Newobject = typecheck.LookupRuntimeFunc("newobject")
 	ir.Syms.Newproc = typecheck.LookupRuntimeFunc("newproc")
+	ir.Syms.PanicBounds = typecheck.LookupRuntimeFunc("panicBounds")
+	ir.Syms.PanicExtend = typecheck.LookupRuntimeFunc("panicExtend")
 	ir.Syms.Panicdivide = typecheck.LookupRuntimeFunc("panicdivide")
 	ir.Syms.PanicdottypeE = typecheck.LookupRuntimeFunc("panicdottypeE")
 	ir.Syms.PanicdottypeI = typecheck.LookupRuntimeFunc("panicdottypeI")
@@ -153,11 +158,13 @@ func InitConfig() {
 	ir.Syms.Loong64HasLAMCAS = typecheck.LookupRuntimeVar("loong64HasLAMCAS") // bool
 	ir.Syms.Loong64HasLAM_BH = typecheck.LookupRuntimeVar("loong64HasLAM_BH") // bool
 	ir.Syms.Loong64HasLSX = typecheck.LookupRuntimeVar("loong64HasLSX")       // bool
+	ir.Syms.RISCV64HasZbb = typecheck.LookupRuntimeVar("riscv64HasZbb")       // bool
 	ir.Syms.Staticuint64s = typecheck.LookupRuntimeVar("staticuint64s")
 	ir.Syms.Typedmemmove = typecheck.LookupRuntimeFunc("typedmemmove")
 	ir.Syms.Udiv = typecheck.LookupRuntimeVar("udiv")                 // asm func with special ABI
 	ir.Syms.WriteBarrier = typecheck.LookupRuntimeVar("writeBarrier") // struct { bool; ... }
 	ir.Syms.Zerobase = typecheck.LookupRuntimeVar("zerobase")
+	ir.Syms.ZeroVal = typecheck.LookupRuntimeVar("zeroVal")
 
 	if Arch.LinkArch.Family == sys.Wasm {
 		BoundsCheckFunc[ssa.BoundsIndex] = typecheck.LookupRuntimeFunc("goPanicIndex")
@@ -177,42 +184,6 @@ func InitConfig() {
 		BoundsCheckFunc[ssa.BoundsSlice3C] = typecheck.LookupRuntimeFunc("goPanicSlice3C")
 		BoundsCheckFunc[ssa.BoundsSlice3CU] = typecheck.LookupRuntimeFunc("goPanicSlice3CU")
 		BoundsCheckFunc[ssa.BoundsConvert] = typecheck.LookupRuntimeFunc("goPanicSliceConvert")
-	} else {
-		BoundsCheckFunc[ssa.BoundsIndex] = typecheck.LookupRuntimeFunc("panicIndex")
-		BoundsCheckFunc[ssa.BoundsIndexU] = typecheck.LookupRuntimeFunc("panicIndexU")
-		BoundsCheckFunc[ssa.BoundsSliceAlen] = typecheck.LookupRuntimeFunc("panicSliceAlen")
-		BoundsCheckFunc[ssa.BoundsSliceAlenU] = typecheck.LookupRuntimeFunc("panicSliceAlenU")
-		BoundsCheckFunc[ssa.BoundsSliceAcap] = typecheck.LookupRuntimeFunc("panicSliceAcap")
-		BoundsCheckFunc[ssa.BoundsSliceAcapU] = typecheck.LookupRuntimeFunc("panicSliceAcapU")
-		BoundsCheckFunc[ssa.BoundsSliceB] = typecheck.LookupRuntimeFunc("panicSliceB")
-		BoundsCheckFunc[ssa.BoundsSliceBU] = typecheck.LookupRuntimeFunc("panicSliceBU")
-		BoundsCheckFunc[ssa.BoundsSlice3Alen] = typecheck.LookupRuntimeFunc("panicSlice3Alen")
-		BoundsCheckFunc[ssa.BoundsSlice3AlenU] = typecheck.LookupRuntimeFunc("panicSlice3AlenU")
-		BoundsCheckFunc[ssa.BoundsSlice3Acap] = typecheck.LookupRuntimeFunc("panicSlice3Acap")
-		BoundsCheckFunc[ssa.BoundsSlice3AcapU] = typecheck.LookupRuntimeFunc("panicSlice3AcapU")
-		BoundsCheckFunc[ssa.BoundsSlice3B] = typecheck.LookupRuntimeFunc("panicSlice3B")
-		BoundsCheckFunc[ssa.BoundsSlice3BU] = typecheck.LookupRuntimeFunc("panicSlice3BU")
-		BoundsCheckFunc[ssa.BoundsSlice3C] = typecheck.LookupRuntimeFunc("panicSlice3C")
-		BoundsCheckFunc[ssa.BoundsSlice3CU] = typecheck.LookupRuntimeFunc("panicSlice3CU")
-		BoundsCheckFunc[ssa.BoundsConvert] = typecheck.LookupRuntimeFunc("panicSliceConvert")
-	}
-	if Arch.LinkArch.PtrSize == 4 {
-		ExtendCheckFunc[ssa.BoundsIndex] = typecheck.LookupRuntimeVar("panicExtendIndex")
-		ExtendCheckFunc[ssa.BoundsIndexU] = typecheck.LookupRuntimeVar("panicExtendIndexU")
-		ExtendCheckFunc[ssa.BoundsSliceAlen] = typecheck.LookupRuntimeVar("panicExtendSliceAlen")
-		ExtendCheckFunc[ssa.BoundsSliceAlenU] = typecheck.LookupRuntimeVar("panicExtendSliceAlenU")
-		ExtendCheckFunc[ssa.BoundsSliceAcap] = typecheck.LookupRuntimeVar("panicExtendSliceAcap")
-		ExtendCheckFunc[ssa.BoundsSliceAcapU] = typecheck.LookupRuntimeVar("panicExtendSliceAcapU")
-		ExtendCheckFunc[ssa.BoundsSliceB] = typecheck.LookupRuntimeVar("panicExtendSliceB")
-		ExtendCheckFunc[ssa.BoundsSliceBU] = typecheck.LookupRuntimeVar("panicExtendSliceBU")
-		ExtendCheckFunc[ssa.BoundsSlice3Alen] = typecheck.LookupRuntimeVar("panicExtendSlice3Alen")
-		ExtendCheckFunc[ssa.BoundsSlice3AlenU] = typecheck.LookupRuntimeVar("panicExtendSlice3AlenU")
-		ExtendCheckFunc[ssa.BoundsSlice3Acap] = typecheck.LookupRuntimeVar("panicExtendSlice3Acap")
-		ExtendCheckFunc[ssa.BoundsSlice3AcapU] = typecheck.LookupRuntimeVar("panicExtendSlice3AcapU")
-		ExtendCheckFunc[ssa.BoundsSlice3B] = typecheck.LookupRuntimeVar("panicExtendSlice3B")
-		ExtendCheckFunc[ssa.BoundsSlice3BU] = typecheck.LookupRuntimeVar("panicExtendSlice3BU")
-		ExtendCheckFunc[ssa.BoundsSlice3C] = typecheck.LookupRuntimeVar("panicExtendSlice3C")
-		ExtendCheckFunc[ssa.BoundsSlice3CU] = typecheck.LookupRuntimeVar("panicExtendSlice3CU")
 	}
 
 	// Wasm (all asm funcs with special ABIs)
@@ -310,7 +281,7 @@ func buildssa(fn *ir.Func, worker int, isPgoHot bool) *ssa.Func {
 	// optionally allows an ABI suffix specification in the GOSSAHASH, e.g. "(*Reader).Reset<0>" etc
 	if strings.Contains(ssaDump, name) { // in all the cases the function name is entirely contained within the GOSSAFUNC string.
 		nameOptABI := name
-		if strings.Contains(ssaDump, ",") { // ABI specification
+		if l := len(ssaDump); l > 1 && ssaDump[l-2] == ',' { // ABI specification
 			nameOptABI = ssa.FuncNameABI(name, abiSelf.Which())
 		} else if strings.HasSuffix(ssaDump, ">") { // if they use the linker syntax instead....
 			l := len(ssaDump)
@@ -410,6 +381,8 @@ func buildssa(fn *ir.Func, worker int, isPgoHot bool) *ssa.Func {
 		// Don't support open-coded defers for 386 ONLY when using shared
 		// libraries, because there is extra code (added by rewriteToUseGot())
 		// preceding the deferreturn/ret code that we don't track correctly.
+		//
+		// TODO this restriction can be removed given adjusted offset in computeDeferReturn in cmd/link/internal/ld/pcln.go
 		s.hasOpenDefers = false
 	}
 	if s.hasOpenDefers && s.instrumentEnterExit {
@@ -692,9 +665,113 @@ func (s *state) paramsToHeap() {
 	do(typ.Results())
 }
 
+// allocSizeAndAlign returns the size and alignment of t.
+// Normally just t.Size() and t.Alignment(), but there
+// is a special case to handle 64-bit atomics on 32-bit systems.
+func allocSizeAndAlign(t *types.Type) (int64, int64) {
+	size, align := t.Size(), t.Alignment()
+	if types.PtrSize == 4 && align == 4 && size >= 8 {
+		// For 64-bit atomics on 32-bit systems.
+		size = types.RoundUp(size, 8)
+		align = 8
+	}
+	return size, align
+}
+func allocSize(t *types.Type) int64 {
+	size, _ := allocSizeAndAlign(t)
+	return size
+}
+func allocAlign(t *types.Type) int64 {
+	_, align := allocSizeAndAlign(t)
+	return align
+}
+
 // newHeapaddr allocates heap memory for n and sets its heap address.
 func (s *state) newHeapaddr(n *ir.Name) {
-	s.setHeapaddr(n.Pos(), n, s.newObject(n.Type(), nil))
+	size := allocSize(n.Type())
+	if n.Type().HasPointers() || size >= maxAggregatedHeapAllocation || size == 0 {
+		s.setHeapaddr(n.Pos(), n, s.newObject(n.Type(), nil))
+		return
+	}
+
+	// Do we have room together with our pending allocations?
+	// If not, flush all the current ones.
+	var used int64
+	for _, v := range s.pendingHeapAllocations {
+		used += allocSize(v.Type.Elem())
+	}
+	if used+size > maxAggregatedHeapAllocation {
+		s.flushPendingHeapAllocations()
+	}
+
+	var allocCall *ssa.Value // (SelectN [0] (call of runtime.newobject))
+	if len(s.pendingHeapAllocations) == 0 {
+		// Make an allocation, but the type being allocated is just
+		// the first pending object. We will come back and update it
+		// later if needed.
+		allocCall = s.newObject(n.Type(), nil)
+	} else {
+		allocCall = s.pendingHeapAllocations[0].Args[0]
+	}
+	// v is an offset to the shared allocation. Offsets are dummy 0s for now.
+	v := s.newValue1I(ssa.OpOffPtr, n.Type().PtrTo(), 0, allocCall)
+
+	// Add to list of pending allocations.
+	s.pendingHeapAllocations = append(s.pendingHeapAllocations, v)
+
+	// Finally, record for posterity.
+	s.setHeapaddr(n.Pos(), n, v)
+}
+
+func (s *state) flushPendingHeapAllocations() {
+	pending := s.pendingHeapAllocations
+	if len(pending) == 0 {
+		return // nothing to do
+	}
+	s.pendingHeapAllocations = nil // reset state
+	ptr := pending[0].Args[0]      // The SelectN [0] op
+	call := ptr.Args[0]            // The runtime.newobject call
+
+	if len(pending) == 1 {
+		// Just a single object, do a standard allocation.
+		v := pending[0]
+		v.Op = ssa.OpCopy // instead of OffPtr [0]
+		return
+	}
+
+	// Sort in decreasing alignment.
+	// This way we never have to worry about padding.
+	// (Stable not required; just cleaner to keep program order among equal alignments.)
+	slices.SortStableFunc(pending, func(x, y *ssa.Value) int {
+		return cmp.Compare(allocAlign(y.Type.Elem()), allocAlign(x.Type.Elem()))
+	})
+
+	// Figure out how much data we need allocate.
+	var size int64
+	for _, v := range pending {
+		v.AuxInt = size // Adjust OffPtr to the right value while we are here.
+		size += allocSize(v.Type.Elem())
+	}
+	align := allocAlign(pending[0].Type.Elem())
+	size = types.RoundUp(size, align)
+
+	// Convert newObject call to a mallocgc call.
+	args := []*ssa.Value{
+		s.constInt(types.Types[types.TUINTPTR], size),
+		s.constNil(call.Args[0].Type), // a nil *runtime._type
+		s.constBool(true),             // needZero TODO: false is ok?
+		call.Args[1],                  // memory
+	}
+	call.Aux = ssa.StaticAuxCall(ir.Syms.MallocGC, s.f.ABIDefault.ABIAnalyzeTypes(
+		[]*types.Type{args[0].Type, args[1].Type, args[2].Type},
+		[]*types.Type{types.Types[types.TUNSAFEPTR]},
+	))
+	call.AuxInt = 4 * s.config.PtrSize // arg+results size, uintptr/ptr/bool/ptr
+	call.SetArgs4(args[0], args[1], args[2], args[3])
+	// TODO: figure out how to pass alignment to runtime
+
+	call.Type = types.NewTuple(types.Types[types.TUNSAFEPTR], types.TypeMem)
+	ptr.Type = types.Types[types.TUNSAFEPTR]
 }
 
 // setHeapaddr allocates a new PAUTO variable to store ptr (which must be non-nil)
@@ -935,6 +1012,14 @@ type state struct {
 	lastDeferCount      int        // Number of defers encountered at that point
 
 	prevCall *ssa.Value // the previous call; use this to tie results to the call op.
+
+	// List of allocations in the current block that are still pending.
+	// They are all (OffPtr (Select0 (runtime call))) and have the correct types,
+	// but the offsets are not set yet, and the type of the runtime call is also not final.
+	pendingHeapAllocations []*ssa.Value
+
+	// First argument of append calls that could be stack allocated.
+	appendTargets map[ir.Node]bool
 }
 
 type funcLine struct {
@@ -1003,6 +1088,9 @@ func (s *state) endBlock() *ssa.Block {
 	if b == nil {
 		return nil
 	}
+
+	s.flushPendingHeapAllocations()
+
 	for len(s.defvars) <= int(b.ID) {
 		s.defvars = append(s.defvars, nil)
 	}
@@ -1233,9 +1321,6 @@ func (s *state) constInt(t *types.Type, c int64) *ssa.Value {
 		s.Fatalf("integer constant too big %d", c)
 	}
 	return s.constInt32(t, int32(c))
-}
-func (s *state) constOffPtrSP(t *types.Type, c int64) *ssa.Value {
-	return s.f.ConstOffPtrSP(t, c, s.sp)
 }
 
 // newValueOrSfCall* are wrappers around newValue*, which may create a call to a
@@ -2033,7 +2118,7 @@ func (s *state) stmt(n ir.Node) {
 
 		// Check the cache first.
 		var merge *ssa.Block
-		if base.Flag.N == 0 && rtabi.UseInterfaceSwitchCache(Arch.LinkArch.Name) {
+		if base.Flag.N == 0 && rtabi.UseInterfaceSwitchCache(Arch.LinkArch.Family) {
 			// Note: we can only use the cache if we have the right atomic load instruction.
 			// Double-check that here.
 			if intrinsics.lookup(Arch.LinkArch.Arch, "internal/runtime/atomic", "Loadp") == nil {
@@ -2166,7 +2251,17 @@ func (s *state) exit() *ssa.Block {
 			}
 			s.openDeferExit()
 		} else {
+			// Shared deferreturn is assigned the "last" position in the function.
+			// The linker picks the first deferreturn call it sees, so this is
+			// the only sensible "shared" place.
+			// To not-share deferreturn, the protocol would need to be changed
+			// so that the call to deferproc-etc would receive the PC offset from
+			// the return PC, and the runtime would need to use that instead of
+			// the deferreturn retrieved from the pcln information.
+			// opendefers would remain a problem, however.
+			s.pushLine(s.curfn.Endlineno)
 			s.rtcall(ir.Syms.Deferreturn, true, nil)
+			s.popLine()
 		}
 	}
 
@@ -2945,13 +3040,8 @@ func (s *state) exprCheckPtr(n ir.Node, checkPtrOK bool) *ssa.Value {
 			return v
 		}
 
-		// map <--> *hmap
-		var mt *types.Type
-		if buildcfg.Experiment.SwissMap {
-			mt = types.NewPtr(reflectdata.SwissMapType())
-		} else {
-			mt = types.NewPtr(reflectdata.OldMapType())
-		}
+		// map <--> *internal/runtime/maps.Map
+		mt := types.NewPtr(reflectdata.MapType())
 		if to.Kind() == types.TMAP && from == mt {
 			return v
 		}
@@ -3338,19 +3428,28 @@ func (s *state) exprCheckPtr(n ir.Node, checkPtrOK bool) *ssa.Value {
 
 	case ir.OLEN, ir.OCAP:
 		n := n.(*ir.UnaryExpr)
+		// Note: all constant cases are handled by the frontend. If len or cap
+		// makes it here, we want the side effects of the argument. See issue 72844.
+		a := s.expr(n.X)
+		t := n.X.Type()
 		switch {
-		case n.X.Type().IsSlice():
+		case t.IsSlice():
 			op := ssa.OpSliceLen
 			if n.Op() == ir.OCAP {
 				op = ssa.OpSliceCap
 			}
-			return s.newValue1(op, types.Types[types.TINT], s.expr(n.X))
-		case n.X.Type().IsString(): // string; not reachable for OCAP
-			return s.newValue1(ssa.OpStringLen, types.Types[types.TINT], s.expr(n.X))
-		case n.X.Type().IsMap(), n.X.Type().IsChan():
-			return s.referenceTypeBuiltin(n, s.expr(n.X))
-		default: // array
-			return s.constInt(types.Types[types.TINT], n.X.Type().NumElem())
+			return s.newValue1(op, types.Types[types.TINT], a)
+		case t.IsString(): // string; not reachable for OCAP
+			return s.newValue1(ssa.OpStringLen, types.Types[types.TINT], a)
+		case t.IsMap(), t.IsChan():
+			return s.referenceTypeBuiltin(n, a)
+		case t.IsArray():
+			return s.constInt(types.Types[types.TINT], t.NumElem())
+		case t.IsPtr() && t.Elem().IsArray():
+			return s.constInt(types.Types[types.TINT], t.Elem().NumElem())
+		default:
+			s.Fatalf("bad type in len/cap: %v", t)
+			return nil
 		}
 
 	case ir.OSPTR:
@@ -3594,6 +3693,7 @@ func (s *state) append(n *ir.CallExpr, inplace bool) *ssa.Value {
 
 	// Add number of new elements to length.
 	nargs := s.constInt(types.Types[types.TINT], int64(len(n.Args)-1))
+	oldLen := l
 	l = s.newValue2(s.ssaOp(ir.OADD, types.Types[types.TINT]), types.Types[types.TINT], l, nargs)
 
 	// Decide if we need to grow
@@ -3612,6 +3712,123 @@ func (s *state) append(n *ir.CallExpr, inplace bool) *ssa.Value {
 	b.SetControl(cmp)
 	b.AddEdgeTo(grow)
 	b.AddEdgeTo(assign)
+
+	// If the result of the append does not escape, we can use
+	// a stack-allocated backing store if len is small enough.
+	// A stack-allocated backing store could be used at every
+	// append that qualifies, but we limit it in some cases to
+	// avoid wasted code and stack space.
+	// TODO: handle ... append case.
+	maxStackSize := int64(base.Debug.VariableMakeThreshold)
+	if !inplace && n.Esc() == ir.EscNone && et.Size() > 0 && et.Size() <= maxStackSize && base.Flag.N == 0 && base.VariableMakeHash.MatchPos(n.Pos(), nil) && !s.appendTargets[sn] {
+		// if l <= K {
+		//   if !used {
+		//     if oldLen == 0 {
+		//       var store [K]T
+		//       s = store[:l:K]
+		//       used = true
+		//     }
+		//   }
+		// }
+		// ... if we didn't use the stack backing store, call growslice ...
+		//
+		// oldLen==0 is not strictly necessary, but requiring it means
+		// we don't have to worry about copying existing elements.
+		// Allowing oldLen>0 would add complication. Worth it? I would guess not.
+		//
+		// TODO: instead of the used boolean, we could insist that this only applies
+		// to monotonic slices, those which once they have >0 entries never go back
+		// to 0 entries. Then oldLen==0 is enough.
+		//
+		// We also do this for append(x, ...) once for every x.
+		// It is ok to do it more often, but it is probably helpful only for
+		// the first instance. TODO: this could use more tuning. Using ir.Node
+		// as the key works for *ir.Name instances but probably nothing else.
+		if s.appendTargets == nil {
+			s.appendTargets = map[ir.Node]bool{}
+		}
+		s.appendTargets[sn] = true
+
+		K := maxStackSize / et.Size() // rounds down
+		KT := types.NewArray(et, K)
+		KT.SetNoalg(true)
+		types.CalcArraySize(KT)
+		// Align more than naturally for the type KT. See issue 73199.
+		align := types.NewArray(types.Types[types.TUINTPTR], 0)
+		types.CalcArraySize(align)
+		storeTyp := types.NewStruct([]*types.Field{
+			{Sym: types.BlankSym, Type: align},
+			{Sym: types.BlankSym, Type: KT},
+		})
+		storeTyp.SetNoalg(true)
+		types.CalcStructSize(storeTyp)
+
+		usedTestBlock := s.f.NewBlock(ssa.BlockPlain)
+		oldLenTestBlock := s.f.NewBlock(ssa.BlockPlain)
+		bodyBlock := s.f.NewBlock(ssa.BlockPlain)
+		growSlice := s.f.NewBlock(ssa.BlockPlain)
+
+		// Make "used" boolean.
+		tBool := types.Types[types.TBOOL]
+		used := typecheck.TempAt(n.Pos(), s.curfn, tBool)
+		s.defvars[s.f.Entry.ID][used] = s.constBool(false) // initialize this variable at fn entry
+
+		// Make backing store variable.
+		tInt := types.Types[types.TINT]
+		backingStore := typecheck.TempAt(n.Pos(), s.curfn, storeTyp)
+		backingStore.SetAddrtaken(true)
+
+		// if l <= K
+		s.startBlock(grow)
+		kTest := s.newValue2(s.ssaOp(ir.OLE, tInt), tBool, l, s.constInt(tInt, K))
+		b := s.endBlock()
+		b.Kind = ssa.BlockIf
+		b.SetControl(kTest)
+		b.AddEdgeTo(usedTestBlock)
+		b.AddEdgeTo(growSlice)
+		b.Likely = ssa.BranchLikely
+
+		// if !used
+		s.startBlock(usedTestBlock)
+		usedTest := s.newValue1(ssa.OpNot, tBool, s.expr(used))
+		b = s.endBlock()
+		b.Kind = ssa.BlockIf
+		b.SetControl(usedTest)
+		b.AddEdgeTo(oldLenTestBlock)
+		b.AddEdgeTo(growSlice)
+		b.Likely = ssa.BranchLikely
+
+		// if oldLen == 0
+		s.startBlock(oldLenTestBlock)
+		oldLenTest := s.newValue2(s.ssaOp(ir.OEQ, tInt), tBool, oldLen, s.constInt(tInt, 0))
+		b = s.endBlock()
+		b.Kind = ssa.BlockIf
+		b.SetControl(oldLenTest)
+		b.AddEdgeTo(bodyBlock)
+		b.AddEdgeTo(growSlice)
+		b.Likely = ssa.BranchLikely
+
+		// var store struct { _ [0]uintptr; arr [K]T }
+		s.startBlock(bodyBlock)
+		if et.HasPointers() {
+			s.vars[memVar] = s.newValue1A(ssa.OpVarDef, types.TypeMem, backingStore, s.mem())
+		}
+		addr := s.addr(backingStore)
+		s.zero(storeTyp, addr)
+
+		// s = store.arr[:l:K]
+		s.vars[ptrVar] = addr
+		s.vars[lenVar] = l // nargs would also be ok because of the oldLen==0 test.
+		s.vars[capVar] = s.constInt(tInt, K)
+
+		// used = true
+		s.assign(used, s.constBool(true), false, 0)
+		b = s.endBlock()
+		b.AddEdgeTo(assign)
+
+		// New block to use for growslice call.
+		grow = growSlice
+	}
 
 	// Call growslice
 	s.startBlock(grow)
@@ -3675,7 +3892,7 @@ func (s *state) append(n *ir.CallExpr, inplace bool) *ssa.Value {
 	}
 
 	// Write args into slice.
-	oldLen := s.newValue2(s.ssaOp(ir.OSUB, types.Types[types.TINT]), types.Types[types.TINT], l, nargs)
+	oldLen = s.newValue2(s.ssaOp(ir.OSUB, types.Types[types.TINT]), types.Types[types.TINT], l, nargs)
 	p2 := s.newValue2(ssa.OpPtrIndex, pt, p, oldLen)
 	for i, arg := range args {
 		addr := s.newValue2(ssa.OpPtrIndex, pt, p2, s.constInt(types.Types[types.TINT], int64(i)))
@@ -3730,7 +3947,7 @@ func (s *state) minMax(n *ir.CallExpr) *ssa.Value {
 		if typ.IsFloat() {
 			hasIntrinsic := false
 			switch Arch.LinkArch.Family {
-			case sys.AMD64, sys.ARM64, sys.Loong64, sys.RISCV64:
+			case sys.AMD64, sys.ARM64, sys.Loong64, sys.RISCV64, sys.S390X:
 				hasIntrinsic = true
 			case sys.PPC64:
 				hasIntrinsic = buildcfg.GOPPC64 >= 9
@@ -4411,6 +4628,8 @@ func (s *state) call(n *ir.CallExpr, k callKind, returnResultAddr bool, deferExt
 		s.Fatalf("go/defer call with arguments: %v", n)
 	}
 
+	isCallDeferRangeFunc := false
+
 	switch n.Op() {
 	case ir.OCALLFUNC:
 		if (k == callNormal || k == callTail) && fn.Op() == ir.ONAME && fn.(*ir.Name).Class == ir.PFUNC {
@@ -4432,6 +4651,9 @@ func (s *state) call(n *ir.CallExpr, k callKind, returnResultAddr bool, deferExt
 				if inRegistersImported || inRegistersSamePackage {
 					callABI = s.f.ABI1
 				}
+			}
+			if fn := n.Fun.Sym().Name; n.Fun.Sym().Pkg == ir.Pkgs.Runtime && fn == "deferrangefunc" {
+				isCallDeferRangeFunc = true
 			}
 			break
 		}
@@ -4593,17 +4815,20 @@ func (s *state) call(n *ir.CallExpr, k callKind, returnResultAddr bool, deferExt
 	}
 
 	// Finish block for defers
-	if k == callDefer || k == callDeferStack {
+	if k == callDefer || k == callDeferStack || isCallDeferRangeFunc {
 		b := s.endBlock()
 		b.Kind = ssa.BlockDefer
 		b.SetControl(call)
 		bNext := s.f.NewBlock(ssa.BlockPlain)
 		b.AddEdgeTo(bNext)
-		// Add recover edge to exit code.
-		r := s.f.NewBlock(ssa.BlockPlain)
-		s.startBlock(r)
-		s.exit()
-		b.AddEdgeTo(r)
+		r := s.f.DeferReturn // Share a single deferreturn among all defers
+		if r == nil {
+			r = s.f.NewBlock(ssa.BlockPlain)
+			s.startBlock(r)
+			s.exit()
+			s.f.DeferReturn = r
+		}
+		b.AddEdgeTo(r) // Add recover edge to exit code.  This is a fake edge to keep the block live.
 		b.Likely = ssa.BranchLikely
 		s.startBlock(bNext)
 	}
@@ -5154,26 +5379,6 @@ func (s *state) putArg(n ir.Node, t *types.Type) *ssa.Value {
 	return a
 }
 
-func (s *state) storeArgWithBase(n ir.Node, t *types.Type, base *ssa.Value, off int64) {
-	pt := types.NewPtr(t)
-	var addr *ssa.Value
-	if base == s.sp {
-		// Use special routine that avoids allocation on duplicate offsets.
-		addr = s.constOffPtrSP(pt, off)
-	} else {
-		addr = s.newValue1I(ssa.OpOffPtr, pt, off, base)
-	}
-
-	if !ssa.CanSSA(t) {
-		a := s.addr(n)
-		s.move(t, addr, a)
-		return
-	}
-
-	a := s.expr(n)
-	s.storeType(t, addr, a, 0, false)
-}
-
 // slice computes the slice v[i:j:k] and returns ptr, len, and cap of result.
 // i,j,k may be nil, in which case they are set to their default value.
 // v may be a slice, string or pointer to an array.
@@ -5452,12 +5657,15 @@ func (s *state) referenceTypeBuiltin(n *ir.UnaryExpr, x *ssa.Value) *ssa.Value {
 	if n.X.Type().IsChan() && n.Op() == ir.OCAP {
 		s.Fatalf("cannot inline cap(chan)") // must use runtime.chancap now
 	}
+	if n.X.Type().IsMap() && n.Op() == ir.OCAP {
+		s.Fatalf("cannot inline cap(map)") // cap(map) does not exist
+	}
 	// if n == nil {
 	//   return 0
 	// } else {
-	//   // len
-	//   return *((*int)n)
-	//   // cap
+	//   // len, the actual loadType depends
+	//   return int(*((*loadType)n))
+	//   // cap (chan only, not used for now)
 	//   return *(((*int)n)+1)
 	// }
 	lenType := n.Type()
@@ -5483,11 +5691,13 @@ func (s *state) referenceTypeBuiltin(n *ir.UnaryExpr, x *ssa.Value) *ssa.Value {
 	s.startBlock(bElse)
 	switch n.Op() {
 	case ir.OLEN:
-		if buildcfg.Experiment.SwissMap && n.X.Type().IsMap() {
-			// length is stored in the first word.
-			s.vars[n] = s.load(lenType, x)
+		if n.X.Type().IsMap() {
+			// length is stored in the first word, but needs conversion to int.
+			loadType := reflectdata.MapType().Field(0).Type // uint64
+			load := s.load(loadType, x)
+			s.vars[n] = s.conv(nil, load, loadType, lenType) // integer conversion doesn't need Node
 		} else {
-			// length is stored in the first word for map/chan
+			// length is stored in the first word for chan, no conversion needed.
 			s.vars[n] = s.load(lenType, x)
 		}
 	case ir.OCAP:
@@ -5760,7 +5970,7 @@ func (s *state) dottype1(pos src.XPos, src, dst *types.Type, iface, source, targ
 		var d *ssa.Value
 		if descriptor != nil {
 			d = s.newValue1A(ssa.OpAddr, byteptr, descriptor, s.sb)
-			if base.Flag.N == 0 && rtabi.UseInterfaceSwitchCache(Arch.LinkArch.Name) {
+			if base.Flag.N == 0 && rtabi.UseInterfaceSwitchCache(Arch.LinkArch.Family) {
 				// Note: we can only use the cache if we have the right atomic load instruction.
 				// Double-check that here.
 				if intrinsics.lookup(Arch.LinkArch.Arch, "internal/runtime/atomic", "Loadp") == nil {
@@ -6330,7 +6540,10 @@ func genssa(f *ssa.Func, pp *objw.Progs) {
 
 	e := f.Frontend().(*ssafn)
 
-	s.livenessMap, s.partLiveArgs = liveness.Compute(e.curfn, f, e.stkptrsize, pp)
+	gatherPrintInfo := f.PrintOrHtmlSSA || ssa.GenssaDump[f.Name]
+
+	var lv *liveness.Liveness
+	s.livenessMap, s.partLiveArgs, lv = liveness.Compute(e.curfn, f, e.stkptrsize, pp, gatherPrintInfo)
 	emitArgInfo(e, f, pp)
 	argLiveBlockMap, argLiveValueMap := liveness.ArgLiveness(e.curfn, f, pp)
 
@@ -6353,7 +6566,6 @@ func genssa(f *ssa.Func, pp *objw.Progs) {
 	var progToValue map[*obj.Prog]*ssa.Value
 	var progToBlock map[*obj.Prog]*ssa.Block
 	var valueToProgAfter []*obj.Prog // The first Prog following computation of a value v; v is visible at this point.
-	gatherPrintInfo := f.PrintOrHtmlSSA || ssa.GenssaDump[f.Name]
 	if gatherPrintInfo {
 		progToValue = make(map[*obj.Prog]*ssa.Value, f.NumValues())
 		progToBlock = make(map[*obj.Prog]*ssa.Block, f.NumBlocks())
@@ -6366,9 +6578,7 @@ func genssa(f *ssa.Func, pp *objw.Progs) {
 			f.Cache.ValueToProgAfter = make([]*obj.Prog, f.NumValues())
 		}
 		valueToProgAfter = f.Cache.ValueToProgAfter[:f.NumValues()]
-		for i := range valueToProgAfter {
-			valueToProgAfter[i] = nil
-		}
+		clear(valueToProgAfter)
 	}
 
 	// If the very first instruction is not tagged as a statement,
@@ -6565,6 +6775,11 @@ func genssa(f *ssa.Func, pp *objw.Progs) {
 		// When doing open-coded defers, generate a disconnected call to
 		// deferreturn and a return. This will be used to during panic
 		// recovery to unwind the stack and return back to the runtime.
+
+		// Note that this exit code doesn't work if a return parameter
+		// is heap-allocated, but open defers aren't enabled in that case.
+
+		// TODO either make this handle heap-allocated return parameters or reuse the other-defers general-purpose code path.
 		s.pp.NextLive = s.livenessMap.DeferReturn
 		p := s.pp.Prog(obj.ACALL)
 		p.To.Type = obj.TYPE_MEM
@@ -6679,6 +6894,9 @@ func genssa(f *ssa.Func, pp *objw.Progs) {
 	if base.Ctxt.Flag_locationlists {
 		var debugInfo *ssa.FuncDebug
 		debugInfo = e.curfn.DebugInfo.(*ssa.FuncDebug)
+		// Save off entry ID in case we need it later for DWARF generation
+		// for return values promoted to the heap.
+		debugInfo.EntryID = f.Entry.ID
 		if e.curfn.ABI == obj.ABIInternal && base.Flag.N != 0 {
 			ssa.BuildFuncDebugNoOptimized(base.Ctxt, f, base.Debug.LocationLists > 1, StackOffset, debugInfo)
 		} else {
@@ -6761,6 +6979,14 @@ func genssa(f *ssa.Func, pp *objw.Progs) {
 		buf.WriteString("<code>")
 		buf.WriteString("<dl class=\"ssa-gen\">")
 		filename := ""
+
+		liveness := lv.Format(nil)
+		if liveness != "" {
+			buf.WriteString("<dt class=\"ssa-prog-src\"></dt><dd class=\"ssa-prog\">")
+			buf.WriteString(html.EscapeString("# " + liveness))
+			buf.WriteString("</dd>")
+		}
+
 		for p := s.pp.Text; p != nil; p = p.Link {
 			// Don't spam every line with the file name, which is often huge.
 			// Only print changes, and "unknown" is not a change.
@@ -6773,6 +6999,19 @@ func genssa(f *ssa.Func, pp *objw.Progs) {
 
 			buf.WriteString("<dt class=\"ssa-prog-src\">")
 			if v, ok := progToValue[p]; ok {
+
+				// Prefix calls with their liveness, if any
+				if p.As != obj.APCDATA {
+					if liveness := lv.Format(v); liveness != "" {
+						// Steal this line, and restart a line
+						buf.WriteString("</dt><dd class=\"ssa-prog\">")
+						buf.WriteString(html.EscapeString("# " + liveness))
+						buf.WriteString("</dd>")
+						// restarting a line
+						buf.WriteString("<dt class=\"ssa-prog-src\">")
+					}
+				}
+
 				buf.WriteString(v.HTML())
 			} else if b, ok := progToBlock[p]; ok {
 				buf.WriteString("<b>" + b.HTML() + "</b>")
@@ -7460,7 +7699,4 @@ func SpillSlotAddr(spill ssa.Spill, baseReg int16, extraOffset int64) obj.Addr {
 	}
 }
 
-var (
-	BoundsCheckFunc [ssa.BoundsKindCount]*obj.LSym
-	ExtendCheckFunc [ssa.BoundsKindCount]*obj.LSym
-)
+var BoundsCheckFunc [ssa.BoundsKindCount]*obj.LSym

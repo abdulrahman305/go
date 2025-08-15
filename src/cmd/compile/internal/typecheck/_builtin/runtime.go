@@ -25,7 +25,7 @@ func throwinit()
 func panicwrap()
 
 func gopanic(interface{})
-func gorecover(*int32) interface{}
+func gorecover() interface{}
 func goschedguarded()
 
 // Note: these declarations are just for wasm port.
@@ -71,11 +71,11 @@ func concatstring4(*[32]byte, string, string, string, string) string
 func concatstring5(*[32]byte, string, string, string, string, string) string
 func concatstrings(*[32]byte, []string) string
 
-func concatbyte2(string, string) []byte
-func concatbyte3(string, string, string) []byte
-func concatbyte4(string, string, string, string) []byte
-func concatbyte5(string, string, string, string, string) []byte
-func concatbytes([]string) []byte
+func concatbyte2(*[32]byte, string, string) []byte
+func concatbyte3(*[32]byte, string, string, string) []byte
+func concatbyte4(*[32]byte, string, string, string, string) []byte
+func concatbyte5(*[32]byte, string, string, string, string, string) []byte
+func concatbytes(*[32]byte, []string) []byte
 
 func cmpstring(string, string) int
 func intstring(*[4]byte, int64) string
@@ -152,12 +152,12 @@ func mapassign_fast32ptr(mapType *byte, hmap map[any]any, key unsafe.Pointer) (v
 func mapassign_fast64(mapType *byte, hmap map[any]any, key uint64) (val *any)
 func mapassign_fast64ptr(mapType *byte, hmap map[any]any, key unsafe.Pointer) (val *any)
 func mapassign_faststr(mapType *byte, hmap map[any]any, key string) (val *any)
-func mapiterinit(mapType *byte, hmap map[any]any, hiter *any)
+func mapIterStart(mapType *byte, hmap map[any]any, hiter *any)
 func mapdelete(mapType *byte, hmap map[any]any, key *any)
 func mapdelete_fast32(mapType *byte, hmap map[any]any, key uint32)
 func mapdelete_fast64(mapType *byte, hmap map[any]any, key uint64)
 func mapdelete_faststr(mapType *byte, hmap map[any]any, key string)
-func mapiternext(hiter *any)
+func mapIterNext(hiter *any)
 func mapclear(mapType *byte, hmap map[any]any)
 
 // *byte is really *runtime.Type
@@ -292,5 +292,6 @@ var arm64HasATOMICS bool
 var loong64HasLAMCAS bool
 var loong64HasLAM_BH bool
 var loong64HasLSX bool
+var riscv64HasZbb bool
 
 func asanregisterglobals(unsafe.Pointer, uintptr)

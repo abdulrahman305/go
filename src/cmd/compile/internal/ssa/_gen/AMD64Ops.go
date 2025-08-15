@@ -95,7 +95,6 @@ func init() {
 		ax         = buildReg("AX")
 		cx         = buildReg("CX")
 		dx         = buildReg("DX")
-		bx         = buildReg("BX")
 		gp         = buildReg("AX CX DX BX BP SI DI R8 R9 R10 R11 R12 R13 R15")
 		g          = buildReg("g")
 		fp         = buildReg("X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14")
@@ -303,6 +302,11 @@ func init() {
 
 		// computes -arg0, flags set for 0-arg0.
 		{name: "NEGLflags", argLength: 1, reg: gp11flags, typ: "(UInt32,Flags)", asm: "NEGL", resultInArg0: true},
+		// compute arg0+auxint. flags set for arg0+auxint.
+		// NOTE: we pretend the CF/OF flags are undefined for these instructions,
+		// so we can use INC/DEC instead of ADDQconst if auxint is +/-1. (INC/DEC don't modify CF.)
+		{name: "ADDQconstflags", argLength: 1, reg: gp11flags, aux: "Int32", asm: "ADDQ", resultInArg0: true},
+		{name: "ADDLconstflags", argLength: 1, reg: gp11flags, aux: "Int32", asm: "ADDL", resultInArg0: true},
 
 		// The following 4 add opcodes return the low 64 bits of the sum in the first result and
 		// the carry (the 65th bit) in the carry flag.
@@ -692,9 +696,15 @@ func init() {
 		// ROUNDSD instruction is only guaraneteed to be available if GOAMD64>=v2.
 		// For GOAMD64<v2, any use must be preceded by a successful check of runtime.x86HasSSE41.
 		{name: "ROUNDSD", argLength: 1, reg: fp11, aux: "Int8", asm: "ROUNDSD"},
+		// See why we need those in issue #71204
+		{name: "LoweredRound32F", argLength: 1, reg: fp11, resultInArg0: true, zeroWidth: true},
+		{name: "LoweredRound64F", argLength: 1, reg: fp11, resultInArg0: true, zeroWidth: true},
 
-		// VFMADD231SD only exists on platforms with the FMA3 instruction set.
-		// Any use must be preceded by a successful check of runtime.support_fma.
+		// VFMADD231Sx only exist on platforms with the FMA3 instruction set.
+		// Any use must be preceded by a successful check of runtime.x86HasFMA or a check of GOAMD64>=v3.
+		// x==S for float32, x==D for float64
+		// arg0 + arg1*arg2, with no intermediate rounding.
+		{name: "VFMADD231SS", argLength: 3, reg: fp31, resultInArg0: true, asm: "VFMADD231SS"},
 		{name: "VFMADD231SD", argLength: 3, reg: fp31, resultInArg0: true, asm: "VFMADD231SD"},
 
 		// Note that these operations don't exactly match the semantics of Go's
@@ -758,7 +768,7 @@ func init() {
 		{name: "MOVLQSX", argLength: 1, reg: gp11, asm: "MOVLQSX"}, // sign extend arg0 from int32 to int64
 		{name: "MOVLQZX", argLength: 1, reg: gp11, asm: "MOVL"},    // zero extend arg0 from int32 to int64
 
-		{name: "MOVLconst", reg: gp01, asm: "MOVL", typ: "UInt32", aux: "Int32", rematerializeable: true}, // 32 low bits of auxint
+		{name: "MOVLconst", reg: gp01, asm: "MOVL", typ: "UInt32", aux: "Int32", rematerializeable: true}, // 32 low bits of auxint (upper 32 are zeroed)
 		{name: "MOVQconst", reg: gp01, asm: "MOVQ", typ: "UInt64", aux: "Int64", rematerializeable: true}, // auxint
 
 		{name: "CVTTSD2SL", argLength: 1, reg: fpgp, asm: "CVTTSD2SL"}, // convert float64 to int32
@@ -879,15 +889,30 @@ func init() {
 		// auxint = # of bytes to zero
 		// returns mem
 		{
-			name:      "DUFFZERO",
+			name:      "LoweredZero",
 			aux:       "Int64",
 			argLength: 2,
 			reg: regInfo{
-				inputs:   []regMask{buildReg("DI")},
-				clobbers: buildReg("DI"),
+				inputs: []regMask{gp},
 			},
 			faultOnNilArg0: true,
-			unsafePoint:    true, // FP maintenance around DUFFCOPY can be clobbered by interrupts
+		},
+
+		// arg0 = pointer to start of memory to zero
+		// arg1 = mem
+		// auxint = # of bytes to zero
+		// returns mem
+		{
+			name:      "LoweredZeroLoop",
+			aux:       "Int64",
+			argLength: 2,
+			reg: regInfo{
+				inputs:       []regMask{gp},
+				clobbersArg0: true,
+			},
+			clobberFlags:   true,
+			faultOnNilArg0: true,
+			needIntTemp:    true,
 		},
 
 		// arg0 = address of memory to zero
@@ -914,20 +939,38 @@ func init() {
 		// arg0 = destination pointer
 		// arg1 = source pointer
 		// arg2 = mem
-		// auxint = # of bytes to copy, must be multiple of 16
+		// auxint = # of bytes to copy
 		// returns memory
 		{
-			name:      "DUFFCOPY",
+			name:      "LoweredMove",
 			aux:       "Int64",
 			argLength: 3,
 			reg: regInfo{
-				inputs:   []regMask{buildReg("DI"), buildReg("SI")},
-				clobbers: buildReg("DI SI X0"), // uses X0 as a temporary
+				inputs:   []regMask{gp, gp},
+				clobbers: buildReg("X14"), // uses X14 as a temporary
+			},
+			faultOnNilArg0: true,
+			faultOnNilArg1: true,
+		},
+		// arg0 = destination pointer
+		// arg1 = source pointer
+		// arg2 = mem
+		// auxint = # of bytes to copy
+		// returns memory
+		{
+			name:      "LoweredMoveLoop",
+			aux:       "Int64",
+			argLength: 3,
+			reg: regInfo{
+				inputs:       []regMask{gp, gp},
+				clobbers:     buildReg("X14"), // uses X14 as a temporary
+				clobbersArg0: true,
+				clobbersArg1: true,
 			},
 			clobberFlags:   true,
 			faultOnNilArg0: true,
 			faultOnNilArg1: true,
-			unsafePoint:    true, // FP maintenance around DUFFCOPY can be clobbered by interrupts
+			needIntTemp:    true,
 		},
 
 		// arg0 = destination pointer
@@ -975,12 +1018,15 @@ func init() {
 
 		{name: "LoweredHasCPUFeature", argLength: 0, reg: gp01, rematerializeable: true, typ: "UInt64", aux: "Sym", symEffect: "None"},
 
-		// There are three of these functions so that they can have three different register inputs.
-		// When we check 0 <= c <= cap (A), then 0 <= b <= c (B), then 0 <= a <= b (C), we want the
-		// default registers to match so we don't need to copy registers around unnecessarily.
-		{name: "LoweredPanicBoundsA", argLength: 3, aux: "Int64", reg: regInfo{inputs: []regMask{dx, bx}}, typ: "Mem", call: true}, // arg0=idx, arg1=len, arg2=mem, returns memory. AuxInt contains report code (see PanicBounds in generic.go).
-		{name: "LoweredPanicBoundsB", argLength: 3, aux: "Int64", reg: regInfo{inputs: []regMask{cx, dx}}, typ: "Mem", call: true}, // arg0=idx, arg1=len, arg2=mem, returns memory. AuxInt contains report code (see PanicBounds in generic.go).
-		{name: "LoweredPanicBoundsC", argLength: 3, aux: "Int64", reg: regInfo{inputs: []regMask{ax, cx}}, typ: "Mem", call: true}, // arg0=idx, arg1=len, arg2=mem, returns memory. AuxInt contains report code (see PanicBounds in generic.go).
+		// LoweredPanicBoundsRR takes x and y, two values that caused a bounds check to fail.
+		// the RC and CR versions are used when one of the arguments is a constant. CC is used
+		// when both are constant (normally both 0, as prove derives the fact that a [0] bounds
+		// failure means the length must have also been 0).
+		// AuxInt contains a report code (see PanicBounds in genericOps.go).
+		{name: "LoweredPanicBoundsRR", argLength: 3, aux: "Int64", reg: regInfo{inputs: []regMask{gp, gp}}, typ: "Mem", call: true},    // arg0=x, arg1=y, arg2=mem, returns memory.
+		{name: "LoweredPanicBoundsRC", argLength: 2, aux: "PanicBoundsC", reg: regInfo{inputs: []regMask{gp}}, typ: "Mem", call: true}, // arg0=x, arg1=mem, returns memory.
+		{name: "LoweredPanicBoundsCR", argLength: 2, aux: "PanicBoundsC", reg: regInfo{inputs: []regMask{gp}}, typ: "Mem", call: true}, // arg0=y, arg1=mem, returns memory.
+		{name: "LoweredPanicBoundsCC", argLength: 1, aux: "PanicBoundsCC", reg: regInfo{}, typ: "Mem", call: true},                     // arg0=mem, returns memory.
 
 		// Constant flag values. For any comparison, there are 5 possible
 		// outcomes: the three from the signed total order (<,==,>) and the
@@ -1156,7 +1202,7 @@ func init() {
 		//
 		// output[i] = input.
 		{name: "PSHUFBbroadcast", argLength: 1, reg: fp11, resultInArg0: true, asm: "PSHUFB"}, // PSHUFB with mask zero, (GOAMD64=v1)
-		{name: "VPBROADCASTB", argLength: 1, reg: gpfp, asm: "VPBROADCASTB"}, // Broadcast input byte from gp (GOAMD64=v3)
+		{name: "VPBROADCASTB", argLength: 1, reg: gpfp, asm: "VPBROADCASTB"},                  // Broadcast input byte from gp (GOAMD64=v3)
 
 		// Byte negate/zero/preserve (GOAMD64=v2).
 		//
@@ -1180,7 +1226,7 @@ func init() {
 		// } else {
 		//   output[i] = 0
 		// }
-		{name: "PCMPEQB", argLength: 2, reg: fp21, resultInArg0: true, asm: "PCMPEQB"},
+		{name: "PCMPEQB", argLength: 2, reg: fp21, resultInArg0: true, asm: "PCMPEQB", commutative: true},
 
 		// Byte sign mask. Output is a bitmap of sign bits from each input byte.
 		//

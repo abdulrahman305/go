@@ -307,8 +307,10 @@ func goriscv64() int {
 		return 20
 	case "rva22u64":
 		return 22
+	case "rva23u64":
+		return 23
 	}
-	Error = fmt.Errorf("invalid GORISCV64: must be rva20u64, rva22u64")
+	Error = fmt.Errorf("invalid GORISCV64: must be rva20u64, rva22u64, rva23u64")
 	v := DefaultGORISCV64[len("rva"):]
 	i := strings.IndexFunc(v, func(r rune) bool {
 		return r < '0' || r > '9'
@@ -390,6 +392,8 @@ func GOGOARCH() (name, value string) {
 		return "GOMIPS64", GOMIPS64
 	case "ppc64", "ppc64le":
 		return "GOPPC64", fmt.Sprintf("power%d", GOPPC64)
+	case "riscv64":
+		return "GORISCV64", fmt.Sprintf("rva%du64", GORISCV64)
 	case "wasm":
 		return "GOWASM", GOWASM.String()
 	}
@@ -440,6 +444,9 @@ func gogoarchTags() []string {
 		list := []string{GOARCH + "." + "rva20u64"}
 		if GORISCV64 >= 22 {
 			list = append(list, GOARCH+"."+"rva22u64")
+		}
+		if GORISCV64 >= 23 {
+			list = append(list, GOARCH+"."+"rva23u64")
 		}
 		return list
 	case "wasm":

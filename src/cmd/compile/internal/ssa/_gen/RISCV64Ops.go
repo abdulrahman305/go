@@ -49,7 +49,7 @@ func riscv64RegName(r int) string {
 
 func init() {
 	var regNamesRISCV64 []string
-	var gpMask, fpMask, gpgMask, gpspMask, gpspsbMask, gpspsbgMask regMask
+	var gpMask, fpMask, gpgMask, gpspMask, gpspsbMask, gpspsbgMask, first16Mask regMask
 	regNamed := make(map[string]regMask)
 
 	// Build the list of register names, creating an appropriately indexed
@@ -93,6 +93,9 @@ func init() {
 			gpspMask |= mask
 			gpspsbMask |= mask
 			gpspsbgMask |= mask
+			if r >= 5 && r < 5+16 {
+				first16Mask |= mask
+			}
 		}
 	}
 
@@ -229,10 +232,17 @@ func init() {
 		{name: "AND", argLength: 2, reg: gp21, asm: "AND", commutative: true},   // arg0 & arg1
 		{name: "ANDN", argLength: 2, reg: gp21, asm: "ANDN"},                    // ^arg0 & arg1
 		{name: "ANDI", argLength: 1, reg: gp11, asm: "ANDI", aux: "Int64"},      // arg0 & auxint
+		{name: "CLZ", argLength: 1, reg: gp11, asm: "CLZ"},                      // count leading zeros
+		{name: "CLZW", argLength: 1, reg: gp11, asm: "CLZW"},                    // count leading zeros of least significant word
+		{name: "CPOP", argLength: 1, reg: gp11, asm: "CPOP"},                    // count set bits
+		{name: "CPOPW", argLength: 1, reg: gp11, asm: "CPOPW"},                  // count set bits in least significant word
+		{name: "CTZ", argLength: 1, reg: gp11, asm: "CTZ"},                      // count trailing zeros
+		{name: "CTZW", argLength: 1, reg: gp11, asm: "CTZW"},                    // count trailing zeros of least significant word
 		{name: "NOT", argLength: 1, reg: gp11, asm: "NOT"},                      // ^arg0
 		{name: "OR", argLength: 2, reg: gp21, asm: "OR", commutative: true},     // arg0 | arg1
 		{name: "ORN", argLength: 2, reg: gp21, asm: "ORN"},                      // ^arg0 | arg1
 		{name: "ORI", argLength: 1, reg: gp11, asm: "ORI", aux: "Int64"},        // arg0 | auxint
+		{name: "REV8", argLength: 1, reg: gp11, asm: "REV8"},                    // reverse bytes
 		{name: "ROL", argLength: 2, reg: gp21, asm: "ROL"},                      // rotate left arg0 by (arg1 & 63)
 		{name: "ROLW", argLength: 2, reg: gp21, asm: "ROLW"},                    // rotate left least significant word of arg0 by (arg1 & 31), sign extended
 		{name: "ROR", argLength: 2, reg: gp21, asm: "ROR"},                      // rotate right arg0 by (arg1 & 63)
@@ -422,12 +432,15 @@ func init() {
 		// Do data barrier. arg0=memorys
 		{name: "LoweredPubBarrier", argLength: 1, asm: "FENCE", hasSideEffects: true},
 
-		// There are three of these functions so that they can have three different register inputs.
-		// When we check 0 <= c <= cap (A), then 0 <= b <= c (B), then 0 <= a <= b (C), we want the
-		// default registers to match so we don't need to copy registers around unnecessarily.
-		{name: "LoweredPanicBoundsA", argLength: 3, aux: "Int64", reg: regInfo{inputs: []regMask{regNamed["X7"], regNamed["X28"]}}, typ: "Mem", call: true}, // arg0=idx, arg1=len, arg2=mem, returns memory. AuxInt contains report code (see PanicBounds in genericOps.go).
-		{name: "LoweredPanicBoundsB", argLength: 3, aux: "Int64", reg: regInfo{inputs: []regMask{regNamed["X6"], regNamed["X7"]}}, typ: "Mem", call: true},  // arg0=idx, arg1=len, arg2=mem, returns memory. AuxInt contains report code (see PanicBounds in genericOps.go).
-		{name: "LoweredPanicBoundsC", argLength: 3, aux: "Int64", reg: regInfo{inputs: []regMask{regNamed["X5"], regNamed["X6"]}}, typ: "Mem", call: true},  // arg0=idx, arg1=len, arg2=mem, returns memory. AuxInt contains report code (see PanicBounds in genericOps.go).
+		// LoweredPanicBoundsRR takes x and y, two values that caused a bounds check to fail.
+		// the RC and CR versions are used when one of the arguments is a constant. CC is used
+		// when both are constant (normally both 0, as prove derives the fact that a [0] bounds
+		// failure means the length must have also been 0).
+		// AuxInt contains a report code (see PanicBounds in genericOps.go).
+		{name: "LoweredPanicBoundsRR", argLength: 3, aux: "Int64", reg: regInfo{inputs: []regMask{first16Mask, first16Mask}}, typ: "Mem", call: true}, // arg0=x, arg1=y, arg2=mem, returns memory.
+		{name: "LoweredPanicBoundsRC", argLength: 2, aux: "PanicBoundsC", reg: regInfo{inputs: []regMask{first16Mask}}, typ: "Mem", call: true},       // arg0=x, arg1=mem, returns memory.
+		{name: "LoweredPanicBoundsCR", argLength: 2, aux: "PanicBoundsC", reg: regInfo{inputs: []regMask{first16Mask}}, typ: "Mem", call: true},       // arg0=y, arg1=mem, returns memory.
+		{name: "LoweredPanicBoundsCC", argLength: 1, aux: "PanicBoundsCC", reg: regInfo{}, typ: "Mem", call: true},                                    // arg0=mem, returns memory.
 
 		// F extension.
 		{name: "FADDS", argLength: 2, reg: fp21, asm: "FADDS", commutative: true, typ: "Float32"},                                           // arg0 + arg1
@@ -440,7 +453,8 @@ func init() {
 		{name: "FNMSUBS", argLength: 3, reg: fp31, asm: "FNMSUBS", commutative: true, typ: "Float32"},                                       // -(arg0 * arg1) - arg2
 		{name: "FSQRTS", argLength: 1, reg: fp11, asm: "FSQRTS", typ: "Float32"},                                                            // sqrt(arg0)
 		{name: "FNEGS", argLength: 1, reg: fp11, asm: "FNEGS", typ: "Float32"},                                                              // -arg0
-		{name: "FMVSX", argLength: 1, reg: gpfp, asm: "FMVSX", typ: "Float32"},                                                              // reinterpret arg0 as float
+		{name: "FMVSX", argLength: 1, reg: gpfp, asm: "FMVSX", typ: "Float32"},                                                              // reinterpret arg0 as float32
+		{name: "FMVXS", argLength: 1, reg: fpgp, asm: "FMVXS", typ: "Int32"},                                                                // reinterpret arg0 as int32, sign extended to 64 bits
 		{name: "FCVTSW", argLength: 1, reg: gpfp, asm: "FCVTSW", typ: "Float32"},                                                            // float32(low 32 bits of arg0)
 		{name: "FCVTSL", argLength: 1, reg: gpfp, asm: "FCVTSL", typ: "Float32"},                                                            // float32(arg0)
 		{name: "FCVTWS", argLength: 1, reg: fpgp, asm: "FCVTWS", typ: "Int32"},                                                              // int32(arg0)
@@ -467,7 +481,8 @@ func init() {
 		{name: "FNEGD", argLength: 1, reg: fp11, asm: "FNEGD", typ: "Float64"},                                                              // -arg0
 		{name: "FABSD", argLength: 1, reg: fp11, asm: "FABSD", typ: "Float64"},                                                              // abs(arg0)
 		{name: "FSGNJD", argLength: 2, reg: fp21, asm: "FSGNJD", typ: "Float64"},                                                            // copy sign of arg1 to arg0
-		{name: "FMVDX", argLength: 1, reg: gpfp, asm: "FMVDX", typ: "Float64"},                                                              // reinterpret arg0 as float
+		{name: "FMVDX", argLength: 1, reg: gpfp, asm: "FMVDX", typ: "Float64"},                                                              // reinterpret arg0 as float64
+		{name: "FMVXD", argLength: 1, reg: fpgp, asm: "FMVXD", typ: "Int64"},                                                                // reinterpret arg0 as int64
 		{name: "FCVTDW", argLength: 1, reg: gpfp, asm: "FCVTDW", typ: "Float64"},                                                            // float64(low 32 bits of arg0)
 		{name: "FCVTDL", argLength: 1, reg: gpfp, asm: "FCVTDL", typ: "Float64"},                                                            // float64(arg0)
 		{name: "FCVTWD", argLength: 1, reg: fpgp, asm: "FCVTWD", typ: "Int32"},                                                              // int32(arg0)
@@ -482,6 +497,27 @@ func init() {
 		{name: "FLED", argLength: 2, reg: fp2gp, asm: "FLED"},                                                                               // arg0 <= arg1
 		{name: "LoweredFMIND", argLength: 2, reg: fp21, resultNotInArgs: true, asm: "FMIND", commutative: true, typ: "Float64"},             // min(arg0, arg1)
 		{name: "LoweredFMAXD", argLength: 2, reg: fp21, resultNotInArgs: true, asm: "FMAXD", commutative: true, typ: "Float64"},             // max(arg0, arg1)
+
+		// Floating point classify (in the F and D extensions).
+		//
+		// The FCLASS instructions will always set exactly one bit in the output
+		// register, all other bits will be cleared.
+		//
+		//   Bit | Class
+		//   ====+=============================
+		//     0 | -∞
+		//     1 | a negative normal number
+		//     2 | a negative subnormal number
+		//     3 | -0
+		//     4 | +0
+		//     5 | a positive subnormal number
+		//     6 | a positive normal number
+		//     7 | +∞
+		//     8 | qNaN
+		//     9 | sNaN
+		//   ====+=============================
+		{name: "FCLASSS", argLength: 1, reg: fpgp, asm: "FCLASSS", typ: "Int64"}, // classify float32
+		{name: "FCLASSD", argLength: 1, reg: fpgp, asm: "FCLASSD", typ: "Int64"}, // classify float64
 	}
 
 	RISCV64blocks := []blockData{

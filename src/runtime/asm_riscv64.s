@@ -247,11 +247,6 @@ TEXT runtime·memhash32<ABIInternal>(SB),NOSPLIT|NOFRAME,$0-24
 TEXT runtime·memhash64<ABIInternal>(SB),NOSPLIT|NOFRAME,$0-24
 	JMP	runtime·memhash64Fallback<ABIInternal>(SB)
 
-// func return0()
-TEXT runtime·return0(SB), NOSPLIT, $0
-	MOV	$0, A0
-	RET
-
 // restore state from Gobuf; longjmp
 
 // func gogo(buf *gobuf)
@@ -267,10 +262,8 @@ TEXT gogo<>(SB), NOSPLIT|NOFRAME, $0
 
 	MOV	gobuf_sp(T0), X2
 	MOV	gobuf_lr(T0), RA
-	MOV	gobuf_ret(T0), A0
 	MOV	gobuf_ctxt(T0), CTXT
 	MOV	ZERO, gobuf_sp(T0)
-	MOV	ZERO, gobuf_ret(T0)
 	MOV	ZERO, gobuf_lr(T0)
 	MOV	ZERO, gobuf_ctxt(T0)
 	MOV	gobuf_pc(T0), T0
@@ -320,7 +313,6 @@ TEXT gosave_systemstack_switch<>(SB),NOSPLIT|NOFRAME,$0
 	MOV	X31, (g_sched+gobuf_pc)(g)
 	MOV	X2, (g_sched+gobuf_sp)(g)
 	MOV	ZERO, (g_sched+gobuf_lr)(g)
-	MOV	ZERO, (g_sched+gobuf_ret)(g)
 	// Assert ctxt is zero. See func save.
 	MOV	(g_sched+gobuf_ctxt)(g), X31
 	BEQ	ZERO, X31, 2(PC)
@@ -540,6 +532,15 @@ TEXT runtime·goexit(SB),NOSPLIT|NOFRAME|TOPFRAME,$0-0
 	JMP	runtime·goexit1(SB)	// does not return
 	// traceback from goexit1 must hit code range of goexit
 	MOV	ZERO, ZERO	// NOP
+
+
+// This is called from .init_array and follows the platform, not the Go ABI.
+TEXT runtime·addmoduledata(SB),NOSPLIT,$0-0
+	// Use X31 as it is a scratch register in both the Go ABI and psABI.
+	MOV	runtime·lastmoduledatap(SB), X31
+	MOV	X10, moduledata_next(X31)
+	MOV	X10, runtime·lastmoduledatap(SB)
+	RET
 
 // func cgocallback(fn, frame unsafe.Pointer, ctxt uintptr)
 // See cgocall.go for more details.
@@ -883,80 +884,32 @@ TEXT runtime·gcWriteBarrier8<ABIInternal>(SB),NOSPLIT,$0
 	MOV	$64, X24
 	JMP	gcWriteBarrier<>(SB)
 
-// Note: these functions use a special calling convention to save generated code space.
-// Arguments are passed in registers (ssa/gen/RISCV64Ops.go), but the space for those
-// arguments are allocated in the caller's stack frame.
-// These stubs write the args into that stack space and then tail call to the
-// corresponding runtime handler.
-// The tail call makes these stubs disappear in backtraces.
-TEXT runtime·panicIndex<ABIInternal>(SB),NOSPLIT,$0-16
-	MOV	T0, X10
-	MOV	T1, X11
-	JMP	runtime·goPanicIndex<ABIInternal>(SB)
-TEXT runtime·panicIndexU<ABIInternal>(SB),NOSPLIT,$0-16
-	MOV	T0, X10
-	MOV	T1, X11
-	JMP	runtime·goPanicIndexU<ABIInternal>(SB)
-TEXT runtime·panicSliceAlen<ABIInternal>(SB),NOSPLIT,$0-16
-	MOV	T1, X10
-	MOV	T2, X11
-	JMP	runtime·goPanicSliceAlen<ABIInternal>(SB)
-TEXT runtime·panicSliceAlenU<ABIInternal>(SB),NOSPLIT,$0-16
-	MOV	T1, X10
-	MOV	T2, X11
-	JMP	runtime·goPanicSliceAlenU<ABIInternal>(SB)
-TEXT runtime·panicSliceAcap<ABIInternal>(SB),NOSPLIT,$0-16
-	MOV	T1, X10
-	MOV	T2, X11
-	JMP	runtime·goPanicSliceAcap<ABIInternal>(SB)
-TEXT runtime·panicSliceAcapU<ABIInternal>(SB),NOSPLIT,$0-16
-	MOV	T1, X10
-	MOV	T2, X11
-	JMP	runtime·goPanicSliceAcapU<ABIInternal>(SB)
-TEXT runtime·panicSliceB<ABIInternal>(SB),NOSPLIT,$0-16
-	MOV	T0, X10
-	MOV	T1, X11
-	JMP	runtime·goPanicSliceB<ABIInternal>(SB)
-TEXT runtime·panicSliceBU<ABIInternal>(SB),NOSPLIT,$0-16
-	MOV	T0, X10
-	MOV	T1, X11
-	JMP	runtime·goPanicSliceBU<ABIInternal>(SB)
-TEXT runtime·panicSlice3Alen<ABIInternal>(SB),NOSPLIT,$0-16
-	MOV	T2, X10
-	MOV	T3, X11
-	JMP	runtime·goPanicSlice3Alen<ABIInternal>(SB)
-TEXT runtime·panicSlice3AlenU<ABIInternal>(SB),NOSPLIT,$0-16
-	MOV	T2, X10
-	MOV	T3, X11
-	JMP	runtime·goPanicSlice3AlenU<ABIInternal>(SB)
-TEXT runtime·panicSlice3Acap<ABIInternal>(SB),NOSPLIT,$0-16
-	MOV	T2, X10
-	MOV	T3, X11
-	JMP	runtime·goPanicSlice3Acap<ABIInternal>(SB)
-TEXT runtime·panicSlice3AcapU<ABIInternal>(SB),NOSPLIT,$0-16
-	MOV	T2, X10
-	MOV	T3, X11
-	JMP	runtime·goPanicSlice3AcapU<ABIInternal>(SB)
-TEXT runtime·panicSlice3B<ABIInternal>(SB),NOSPLIT,$0-16
-	MOV	T1, X10
-	MOV	T2, X11
-	JMP	runtime·goPanicSlice3B<ABIInternal>(SB)
-TEXT runtime·panicSlice3BU<ABIInternal>(SB),NOSPLIT,$0-16
-	MOV	T1, X10
-	MOV	T2, X11
-	JMP	runtime·goPanicSlice3BU<ABIInternal>(SB)
-TEXT runtime·panicSlice3C<ABIInternal>(SB),NOSPLIT,$0-16
-	MOV	T0, X10
-	MOV	T1, X11
-	JMP	runtime·goPanicSlice3C<ABIInternal>(SB)
-TEXT runtime·panicSlice3CU<ABIInternal>(SB),NOSPLIT,$0-16
-	MOV	T0, X10
-	MOV	T1, X11
-	JMP	runtime·goPanicSlice3CU<ABIInternal>(SB)
-TEXT runtime·panicSliceConvert<ABIInternal>(SB),NOSPLIT,$0-16
-	MOV	T2, X10
-	MOV	T3, X11
-	JMP	runtime·goPanicSliceConvert<ABIInternal>(SB)
+TEXT runtime·panicBounds<ABIInternal>(SB),NOSPLIT,$144-0
+	NO_LOCAL_POINTERS
+	// Save all 16 int registers that could have an index in them.
+	// They may be pointers, but if they are they are dead.
+	// Skip X0 aka ZERO, X1 aka LR, X2 aka SP, X3 aka GP, X4 aka TP.
+	MOV	X5, 24(X2)
+	MOV	X6, 32(X2)
+	MOV	X7, 40(X2)
+	MOV	X8, 48(X2)
+	MOV	X9, 56(X2)
+	MOV	X10, 64(X2)
+	MOV	X11, 72(X2)
+	MOV	X12, 80(X2)
+	MOV	X13, 88(X2)
+	MOV	X14, 96(X2)
+	MOV	X15, 104(X2)
+	MOV	X16, 112(X2)
+	MOV	X17, 120(X2)
+	MOV	X18, 128(X2)
+	MOV	X19, 136(X2)
+	MOV	X20, 144(X2)
+
+	MOV	X1, X10		// PC immediately after call to panicBounds
+	ADD	$24, X2, X11	// pointer to save area
+	CALL	runtime·panicBounds64<ABIInternal>(SB)
+	RET
 
 DATA	runtime·mainPC+0(SB)/8,$runtime·main<ABIInternal>(SB)
 GLOBL	runtime·mainPC(SB),RODATA,$8

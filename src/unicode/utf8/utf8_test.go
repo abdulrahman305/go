@@ -13,16 +13,6 @@ import (
 )
 
 // Validate the constants redefined from unicode.
-func init() {
-	if MaxRune != unicode.MaxRune {
-		panic("utf8.MaxRune is wrong")
-	}
-	if RuneError != unicode.ReplacementChar {
-		panic("utf8.RuneError is wrong")
-	}
-}
-
-// Validate the constants redefined from unicode.
 func TestConstants(t *testing.T) {
 	if MaxRune != unicode.MaxRune {
 		t.Errorf("utf8.MaxRune is wrong: %x should be %x", MaxRune, unicode.MaxRune)
@@ -497,6 +487,16 @@ var validTests = []ValidTest{
 	{string("\xc0\x80"), false},             // U+0000 encoded in two bytes: incorrect
 	{string("\xed\xa0\x80"), false},         // U+D800 high surrogate (sic)
 	{string("\xed\xbf\xbf"), false},         // U+DFFF low surrogate (sic)
+}
+
+func init() {
+	for i := range 100 {
+		validTests = append(validTests, ValidTest{in: strings.Repeat("a", i), out: true})
+		validTests = append(validTests, ValidTest{in: strings.Repeat("a", i) + "Ж", out: true})
+		validTests = append(validTests, ValidTest{in: strings.Repeat("a", i) + "\xe2", out: false})
+		validTests = append(validTests, ValidTest{in: strings.Repeat("a", i) + "Ж" + strings.Repeat("b", i), out: true})
+		validTests = append(validTests, ValidTest{in: strings.Repeat("a", i) + "\xe2" + strings.Repeat("b", i), out: false})
+	}
 }
 
 func TestValid(t *testing.T) {

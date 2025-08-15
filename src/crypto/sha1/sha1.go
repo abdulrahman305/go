@@ -93,6 +93,11 @@ func consumeUint32(b []byte) ([]byte, uint32) {
 	return b[4:], byteorder.BEUint32(b)
 }
 
+func (d *digest) Clone() (hash.Cloner, error) {
+	r := *d
+	return &r, nil
+}
+
 func (d *digest) Reset() {
 	d.h[0] = init0
 	d.h[1] = init1
@@ -111,9 +116,6 @@ func New() hash.Hash {
 	if boring.Enabled {
 		return boring.NewSHA1()
 	}
-	if fips140only.Enabled {
-		panic("crypto/sha1: use of weak SHA-1 is not allowed in FIPS 140-only mode")
-	}
 	d := new(digest)
 	d.Reset()
 	return d
@@ -124,6 +126,9 @@ func (d *digest) Size() int { return Size }
 func (d *digest) BlockSize() int { return BlockSize }
 
 func (d *digest) Write(p []byte) (nn int, err error) {
+	if fips140only.Enabled {
+		return 0, errors.New("crypto/sha1: use of SHA-1 is not allowed in FIPS 140-only mode")
+	}
 	boring.Unreachable()
 	nn = len(p)
 	d.len += uint64(nn)
@@ -156,6 +161,10 @@ func (d *digest) Sum(in []byte) []byte {
 }
 
 func (d *digest) checkSum() [Size]byte {
+	if fips140only.Enabled {
+		panic("crypto/sha1: use of SHA-1 is not allowed in FIPS 140-only mode")
+	}
+
 	len := d.len
 	// Padding.  Add a 1 bit and 0 bits until 56 bytes mod 64.
 	var tmp [64 + 8]byte // padding + length buffer
@@ -196,6 +205,10 @@ func (d *digest) ConstantTimeSum(in []byte) []byte {
 }
 
 func (d *digest) constSum() [Size]byte {
+	if fips140only.Enabled {
+		panic("crypto/sha1: use of SHA-1 is not allowed in FIPS 140-only mode")
+	}
+
 	var length [8]byte
 	l := d.len << 3
 	for i := uint(0); i < 8; i++ {
@@ -262,7 +275,7 @@ func Sum(data []byte) [Size]byte {
 		return boring.SHA1(data)
 	}
 	if fips140only.Enabled {
-		panic("crypto/sha1: use of weak SHA-1 is not allowed in FIPS 140-only mode")
+		panic("crypto/sha1: use of SHA-1 is not allowed in FIPS 140-only mode")
 	}
 	var d digest
 	d.Reset()

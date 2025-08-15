@@ -468,7 +468,30 @@ type modulehash struct {
 // To make sure the map isn't collected, we keep a second reference here.
 var pinnedTypemaps []map[typeOff]*_type
 
-var firstmoduledata moduledata  // linker symbol
+// aixStaticDataBase (used only on AIX) holds the unrelocated address
+// of the data section, set by the linker.
+//
+// On AIX, an R_ADDR relocation from an RODATA symbol to a DATA symbol
+// does not work, as the dynamic loader can change the address of the
+// data section, and it is not possible to apply a dynamic relocation
+// to RODATA. In order to get the correct address, we need to apply
+// the delta between unrelocated and relocated data section addresses.
+// aixStaticDataBase is the unrelocated address, and moduledata.data is
+// the relocated one.
+var aixStaticDataBase uintptr // linker symbol
+
+var firstmoduledata moduledata // linker symbol
+
+// lastmoduledatap should be an internal detail,
+// but widely used packages access it using linkname.
+// Notable members of the hall of shame include:
+//   - github.com/bytedance/sonic
+//
+// Do not remove or change the type signature.
+// See go.dev/issues/67401.
+// See go.dev/issues/71672.
+//
+//go:linkname lastmoduledatap
 var lastmoduledatap *moduledata // linker symbol
 
 var modulesSlice *[]*moduledata // see activeModules
@@ -579,6 +602,16 @@ func moduledataverify() {
 
 const debugPcln = false
 
+// moduledataverify1 should be an internal detail,
+// but widely used packages access it using linkname.
+// Notable members of the hall of shame include:
+//   - github.com/bytedance/sonic
+//
+// Do not remove or change the type signature.
+// See go.dev/issues/67401.
+// See go.dev/issues/71672.
+//
+//go:linkname moduledataverify1
 func moduledataverify1(datap *moduledata) {
 	// Check that the pclntab's format is valid.
 	hdr := datap.pcHeader
@@ -614,8 +647,15 @@ func moduledataverify1(datap *moduledata) {
 
 	min := datap.textAddr(datap.ftab[0].entryoff)
 	max := datap.textAddr(datap.ftab[nftab].entryoff)
-	if datap.minpc != min || datap.maxpc != max {
-		println("minpc=", hex(datap.minpc), "min=", hex(min), "maxpc=", hex(datap.maxpc), "max=", hex(max))
+	minpc := datap.minpc
+	maxpc := datap.maxpc
+	if GOARCH == "wasm" {
+		// On Wasm, the func table contains the function index, whereas
+		// the "PC" is function index << 16 + block index.
+		maxpc = alignUp(maxpc, 1<<16) // round up for end PC
+	}
+	if minpc != min || maxpc != max {
+		println("minpc=", hex(minpc), "min=", hex(min), "maxpc=", hex(maxpc), "max=", hex(max))
 		throw("minpc or maxpc invalid")
 	}
 
@@ -661,6 +701,11 @@ func (md *moduledata) textAddr(off32 uint32) uintptr {
 			throw("runtime: text offset out of range")
 		}
 	}
+	if GOARCH == "wasm" {
+		// On Wasm, a text offset (e.g. in the method table) is function index, whereas
+		// the "PC" is function index << 16 + block index.
+		res <<= 16
+	}
 	return res
 }
 
@@ -671,8 +716,17 @@ func (md *moduledata) textAddr(off32 uint32) uintptr {
 //
 //go:nosplit
 func (md *moduledata) textOff(pc uintptr) (uint32, bool) {
-	res := uint32(pc - md.text)
+	off := pc - md.text
+	if GOARCH == "wasm" {
+		// On Wasm, the func table contains the function index, whereas
+		// the "PC" is function index << 16 + block index.
+		off >>= 16
+	}
+	res := uint32(off)
 	if len(md.textsectmap) > 1 {
+		if GOARCH == "wasm" {
+			fatal("unexpected multiple text sections on Wasm")
+		}
 		for i, sect := range md.textsectmap {
 			if sect.baseaddr > pc {
 				// pc is not in any section.
@@ -871,6 +925,11 @@ func findfunc(pc uintptr) funcInfo {
 	}
 
 	x := uintptr(pcOff) + datap.text - datap.minpc // TODO: are datap.text and datap.minpc always equal?
+	if GOARCH == "wasm" {
+		// On Wasm, pcOff is the function index, whereas
+		// the "PC" is function index << 16 + block index.
+		x = uintptr(pcOff)<<16 + datap.text - datap.minpc
+	}
 	b := x / abi.FuncTabBucketSize
 	i := x % abi.FuncTabBucketSize / (abi.FuncTabBucketSize / nsub)
 
@@ -948,6 +1007,9 @@ func pcvalue(f funcInfo, off uint32, targetpc uintptr, strict bool) (int32, uint
 	// matches the cached contents.
 	const debugCheckCache = false
 
+	// If true, skip checking the cache entirely.
+	const skipCache = false
+
 	if off == 0 {
 		return -1, 0
 	}
@@ -958,7 +1020,7 @@ func pcvalue(f funcInfo, off uint32, targetpc uintptr, strict bool) (int32, uint
 	var checkVal int32
 	var checkPC uintptr
 	ck := pcvalueCacheKey(targetpc)
-	{
+	if !skipCache {
 		mp := acquirem()
 		cache := &mp.pcvalueCache
 		// The cache can be used by the signal handler on this M. Avoid

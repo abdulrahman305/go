@@ -295,7 +295,7 @@ func (check *Checker) collectObjects() {
 
 				if imp.fake {
 					// match 1.17 cmd/compile (not prescribed by spec)
-					pkgName.used = true
+					check.usedPkgNames[pkgName] = true
 				}
 
 				// add import to file scope
@@ -388,7 +388,7 @@ func (check *Checker) collectObjects() {
 				// declare all variables
 				values := syntax.UnpackListExpr(s.Values)
 				for i, name := range s.NameList {
-					obj := NewVar(name.Pos(), pkg, name.Value, nil)
+					obj := newVar(PackageVar, name.Pos(), pkg, name.Value, nil)
 					lhs[i] = obj
 
 					d := d1
@@ -436,10 +436,8 @@ func (check *Checker) collectObjects() {
 					if name == "init" {
 						obj.parent = pkg.scope
 						check.recordDef(s.Name, obj)
-						// init functions must have a body
 						if s.Body == nil {
-							// TODO(gri) make this error message consistent with the others above
-							check.softErrorf(obj.pos, MissingInitBody, "missing function body")
+							check.softErrorf(obj.pos, MissingInitBody, "func init must have a body")
 						}
 					} else {
 						check.declare(pkg.scope, s.Name, obj, nopos)
@@ -715,7 +713,7 @@ func (check *Checker) unusedImports() {
 	// (initialization), use the blank identifier as explicit package name."
 
 	for _, obj := range check.imports {
-		if !obj.used && obj.name != "_" {
+		if obj.name != "_" && !check.usedPkgNames[obj] {
 			check.errorUnusedPkg(obj)
 		}
 	}

@@ -722,7 +722,7 @@ func (t *Transport) roundTrip(req *Request) (_ *Response, err error) {
 			if e, ok := err.(transportReadFromServerError); ok {
 				err = e.err
 			}
-			if b, ok := req.Body.(*readTrackingBody); ok && !b.didClose {
+			if b, ok := req.Body.(*readTrackingBody); ok && !b.didClose.Load() {
 				// Issue 49621: Close the request body if pconn.roundTrip
 				// didn't do so already. This can happen if the pconn
 				// write loop exits without reading the write request.
@@ -752,8 +752,8 @@ var errCannotRewind = errors.New("net/http: cannot rewind body after connection 
 
 type readTrackingBody struct {
 	io.ReadCloser
-	didRead  bool
-	didClose bool
+	didRead  bool // not atomic.Bool because only one goroutine (the user's) should be accessing
+	didClose atomic.Bool
 }
 
 func (r *readTrackingBody) Read(data []byte) (int, error) {
@@ -762,7 +762,9 @@ func (r *readTrackingBody) Read(data []byte) (int, error) {
 }
 
 func (r *readTrackingBody) Close() error {
-	r.didClose = true
+	if !r.didClose.CompareAndSwap(false, true) {
+		return nil
+	}
 	return r.ReadCloser.Close()
 }
 
@@ -784,10 +786,10 @@ func setupRewindBody(req *Request) *Request {
 // rewindBody takes care of closing req.Body when appropriate
 // (in all cases except when rewindBody returns req unmodified).
 func rewindBody(req *Request) (rewound *Request, err error) {
-	if req.Body == nil || req.Body == NoBody || (!req.Body.(*readTrackingBody).didRead && !req.Body.(*readTrackingBody).didClose) {
+	if req.Body == nil || req.Body == NoBody || (!req.Body.(*readTrackingBody).didRead && !req.Body.(*readTrackingBody).didClose.Load()) {
 		return req, nil // nothing to rewind
 	}
-	if !req.Body.(*readTrackingBody).didClose {
+	if !req.Body.(*readTrackingBody).didClose.Load() {
 		req.closeBody()
 	}
 	if req.GetBody == nil {
@@ -1358,7 +1360,7 @@ func (w *wantConn) tryDeliver(pc *persistConn, err error, idleAt time.Time) bool
 
 // cancel marks w as no longer wanting a result (for example, due to cancellation).
 // If a connection has been delivered already, cancel returns it with t.putOrCloseIdleConn.
-func (w *wantConn) cancel(t *Transport, err error) {
+func (w *wantConn) cancel(t *Transport) {
 	w.mu.Lock()
 	var pc *persistConn
 	if w.done {
@@ -1507,7 +1509,7 @@ func (t *Transport) getConn(treq *transportRequest, cm connectMethod) (_ *persis
 	}
 	defer func() {
 		if err != nil {
-			w.cancel(t, err)
+			w.cancel(t)
 		}
 	}()
 
@@ -2575,6 +2577,13 @@ func (b *readWriteCloserBody) Read(p []byte) (n int, err error) {
 	return b.ReadWriteCloser.Read(p)
 }
 
+func (b *readWriteCloserBody) CloseWrite() error {
+	if cw, ok := b.ReadWriteCloser.(interface{ CloseWrite() error }); ok {
+		return cw.CloseWrite()
+	}
+	return fmt.Errorf("CloseWrite: %w", ErrNotSupported)
+}
+
 // nothingWrittenError wraps a write errors which ended up writing zero bytes.
 type nothingWrittenError struct {
 	error
@@ -2924,11 +2933,17 @@ func (pc *persistConn) closeLocked(err error) {
 	pc.mutateHeaderFunc = nil
 }
 
-var portMap = map[string]string{
-	"http":    "80",
-	"https":   "443",
-	"socks5":  "1080",
-	"socks5h": "1080",
+func schemePort(scheme string) string {
+	switch scheme {
+	case "http":
+		return "80"
+	case "https":
+		return "443"
+	case "socks5", "socks5h":
+		return "1080"
+	default:
+		return ""
+	}
 }
 
 func idnaASCIIFromURL(url *url.URL) string {
@@ -2943,7 +2958,7 @@ func idnaASCIIFromURL(url *url.URL) string {
 func canonicalAddr(url *url.URL) string {
 	port := url.Port()
 	if port == "" {
-		port = portMap[url.Scheme]
+		port = schemePort(url.Scheme)
 	}
 	return net.JoinHostPort(idnaASCIIFromURL(url), port)
 }

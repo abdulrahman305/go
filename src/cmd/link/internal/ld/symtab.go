@@ -155,7 +155,7 @@ func putelfsym(ctxt *Link, x loader.Sym, typ elf.SymType, curbind elf.SymBind) {
 	// match exactly. Tools like DTrace will have to wait for now.
 	if !ctxt.DynlinkingGo() {
 		// Rewrite · to . for ASCII-only tools like DTrace (sigh)
-		sname = strings.Replace(sname, "·", ".", -1)
+		sname = strings.ReplaceAll(sname, "·", ".")
 	}
 
 	if ctxt.DynlinkingGo() && bind == elf.STB_GLOBAL && curbind == elf.STB_LOCAL && ldr.SymType(x).IsText() {
@@ -706,6 +706,17 @@ func (ctxt *Link) symtab(pcln *pclntab) []sym.SymKind {
 		// Most of them are actually referenced (our deadcode pass ensures that),
 		// except go:buildid which is generated late and not used by the program.
 		addRef("go:buildid")
+	}
+	if ctxt.IsAIX() {
+		// On AIX, an R_ADDR relocation from an RODATA symbol to a DATA symbol
+		// does not work. See data.go:relocsym, case R_ADDR.
+		// Here we record the unrelocated address in aixStaticDataBase (it is
+		// unrelocated as it is in RODATA) so we can compute the delta at
+		// run time.
+		sb := ldr.CreateSymForUpdate("runtime.aixStaticDataBase", 0)
+		sb.SetSize(0)
+		sb.AddAddr(ctxt.Arch, ldr.Lookup("runtime.data", 0))
+		sb.SetType(sym.SRODATA)
 	}
 
 	// text section information

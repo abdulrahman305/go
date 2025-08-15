@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"crypto/internal/fips140"
 	"crypto/internal/fips140/hmac"
+	"hash"
 )
 
 // hmacDRBG is an SP 800-90A Rev. 1 HMAC_DRBG.
@@ -48,7 +49,7 @@ type personalizationString interface {
 	isPersonalizationString()
 }
 
-func newDRBG[H fips140.Hash](hash func() H, entropy, nonce []byte, s personalizationString) *hmacDRBG {
+func newDRBG[H hash.Hash](hash func() H, entropy, nonce []byte, s personalizationString) *hmacDRBG {
 	// HMAC_DRBG_Instantiate_algorithm, per Section 10.1.2.3.
 	fips140.RecordApproved()
 
@@ -114,6 +115,15 @@ func newDRBG[H fips140.Hash](hash func() H, entropy, nonce []byte, s personaliza
 	d.hK = h
 	d.reseedCounter = 1
 	return d
+}
+
+// TestingOnlyNewDRBG creates an SP 800-90A Rev. 1 HMAC_DRBG with a plain
+// personalization string.
+//
+// This should only be used for ACVP testing. hmacDRBG is not intended to be
+// used directly.
+func TestingOnlyNewDRBG(hash func() hash.Hash, entropy, nonce []byte, s []byte) *hmacDRBG {
+	return newDRBG(hash, entropy, nonce, plainPersonalizationString(s))
 }
 
 func pad000(h *hmac.HMAC, writtenSoFar int) {

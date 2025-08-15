@@ -30,12 +30,15 @@ type symsStruct struct {
 	Goschedguarded    *obj.LSym
 	Growslice         *obj.LSym
 	InterfaceSwitch   *obj.LSym
+	MallocGC          *obj.LSym
 	Memmove           *obj.LSym
 	Msanread          *obj.LSym
 	Msanwrite         *obj.LSym
 	Msanmove          *obj.LSym
 	Newobject         *obj.LSym
 	Newproc           *obj.LSym
+	PanicBounds       *obj.LSym
+	PanicExtend       *obj.LSym
 	Panicdivide       *obj.LSym
 	Panicshift        *obj.LSym
 	PanicdottypeE     *obj.LSym
@@ -58,11 +61,13 @@ type symsStruct struct {
 	Udiv             *obj.LSym
 	WriteBarrier     *obj.LSym
 	Zerobase         *obj.LSym
+	ZeroVal          *obj.LSym
 	ARM64HasATOMICS  *obj.LSym
 	ARMHasVFPv4      *obj.LSym
 	Loong64HasLAMCAS *obj.LSym
 	Loong64HasLAM_BH *obj.LSym
 	Loong64HasLSX    *obj.LSym
+	RISCV64HasZbb    *obj.LSym
 	X86HasFMA        *obj.LSym
 	X86HasPOPCNT     *obj.LSym
 	X86HasSSE41      *obj.LSym

@@ -144,7 +144,7 @@ func osinit() {
 	// pthread_create delayed until end of goenvs so that we
 	// can look at the environment first.
 
-	ncpu = getncpu()
+	numCPUStartup = getCPUCount()
 	physPageSize = getPageSize()
 
 	osinit_hack()
@@ -168,7 +168,7 @@ const (
 	_HW_PAGESIZE = 7
 )
 
-func getncpu() int32 {
+func getCPUCount() int32 {
 	// Use sysctl to fetch hw.ncpu.
 	mib := [2]uint32{_CTL_HW, _HW_NCPU}
 	out := uint32(0)
@@ -344,8 +344,12 @@ func unminit() {
 	getg().m.procid = 0
 }
 
-// Called from exitm, but not from drop, to undo the effect of thread-owned
+// Called from mexit, but not from dropm, to undo the effect of thread-owned
 // resources in minit, semacreate, or elsewhere. Do not take locks after calling this.
+//
+// This always runs without a P, so //go:nowritebarrierrec is required.
+//
+//go:nowritebarrierrec
 func mdestroy(mp *m) {
 }
 

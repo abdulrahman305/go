@@ -28,6 +28,11 @@ const Size = 16
 // The blocksize of MD5 in bytes.
 const BlockSize = 64
 
+// The maximum number of bytes that can be passed to block(). The limit exists
+// because implementations that rely on assembly routines are not preemptible.
+const maxAsmIters = 1024
+const maxAsmSize = BlockSize * maxAsmIters // 64KiB
+
 const (
 	init0 = 0x67452301
 	init1 = 0xEFCDAB89
@@ -99,14 +104,16 @@ func consumeUint32(b []byte) ([]byte, uint32) {
 	return b[4:], byteorder.BEUint32(b[0:4])
 }
 
+func (d *digest) Clone() (hash.Cloner, error) {
+	r := *d
+	return &r, nil
+}
+
 // New returns a new [hash.Hash] computing the MD5 checksum. The Hash
 // also implements [encoding.BinaryMarshaler], [encoding.BinaryAppender] and
 // [encoding.BinaryUnmarshaler] to marshal and unmarshal the internal
 // state of the hash.
 func New() hash.Hash {
-	if fips140only.Enabled {
-		panic("crypto/md5: use of MD5 is not allowed in FIPS 140-only mode")
-	}
 	d := new(digest)
 	d.Reset()
 	return d
@@ -117,6 +124,9 @@ func (d *digest) Size() int { return Size }
 func (d *digest) BlockSize() int { return BlockSize }
 
 func (d *digest) Write(p []byte) (nn int, err error) {
+	if fips140only.Enabled {
+		return 0, errors.New("crypto/md5: use of MD5 is not allowed in FIPS 140-only mode")
+	}
 	// Note that we currently call block or blockGeneric
 	// directly (guarded using haveAsm) because this allows
 	// escape analysis to see that p and d don't escape.
@@ -138,6 +148,11 @@ func (d *digest) Write(p []byte) (nn int, err error) {
 	if len(p) >= BlockSize {
 		n := len(p) &^ (BlockSize - 1)
 		if haveAsm {
+			for n > maxAsmSize {
+				block(d, p[:maxAsmSize])
+				p = p[maxAsmSize:]
+				n -= maxAsmSize
+			}
 			block(d, p[:n])
 		} else {
 			blockGeneric(d, p[:n])
@@ -158,6 +173,10 @@ func (d *digest) Sum(in []byte) []byte {
 }
 
 func (d *digest) checkSum() [Size]byte {
+	if fips140only.Enabled {
+		panic("crypto/md5: use of MD5 is not allowed in FIPS 140-only mode")
+	}
+
 	// Append 0x80 to the end of the message and then append zeros
 	// until the length is a multiple of 56 bytes. Finally append
 	// 8 bytes representing the message length in bits.
@@ -184,9 +203,6 @@ func (d *digest) checkSum() [Size]byte {
 
 // Sum returns the MD5 checksum of the data.
 func Sum(data []byte) [Size]byte {
-	if fips140only.Enabled {
-		panic("crypto/md5: use of MD5 is not allowed in FIPS 140-only mode")
-	}
 	var d digest
 	d.Reset()
 	d.Write(data)

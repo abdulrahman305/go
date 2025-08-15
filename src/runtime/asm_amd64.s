@@ -412,11 +412,9 @@ TEXT gogo<>(SB), NOSPLIT, $0
 	MOVQ	DX, g(CX)
 	MOVQ	DX, R14		// set the g register
 	MOVQ	gobuf_sp(BX), SP	// restore SP
-	MOVQ	gobuf_ret(BX), AX
 	MOVQ	gobuf_ctxt(BX), DX
 	MOVQ	gobuf_bp(BX), BP
 	MOVQ	$0, gobuf_sp(BX)	// clear to help garbage collector
-	MOVQ	$0, gobuf_ret(BX)
 	MOVQ	$0, gobuf_ctxt(BX)
 	MOVQ	$0, gobuf_bp(BX)
 	MOVQ	gobuf_pc(BX), BX
@@ -454,6 +452,7 @@ goodm:
 	get_tls(CX)		// Set G in TLS
 	MOVQ	R14, g(CX)
 	MOVQ	(g_sched+gobuf_sp)(R14), SP	// sp = g0.sched.sp
+	MOVQ	$0, BP	// clear frame pointer, as caller may execute on another M
 	PUSHQ	AX	// open up space for fn's arg spill slot
 	MOVQ	0(DX), R12
 	CALL	R12		// fn(g)
@@ -617,7 +616,7 @@ TEXT runtime·morestack(SB),NOSPLIT|NOFRAME,$0-0
 	MOVQ	m_g0(BX), BX
 	MOVQ	BX, g(CX)
 	MOVQ	(g_sched+gobuf_sp)(BX), SP
-	MOVQ	(g_sched+gobuf_bp)(BX), BP
+	MOVQ	$0, BP			// clear frame pointer, as caller may execute on another M
 	CALL	runtime·newstack(SB)
 	CALL	runtime·abort(SB)	// crash if newstack returns
 	RET
@@ -828,7 +827,6 @@ TEXT gosave_systemstack_switch<>(SB),NOSPLIT|NOFRAME,$0
 	MOVQ	R9, (g_sched+gobuf_pc)(R14)
 	LEAQ	8(SP), R9
 	MOVQ	R9, (g_sched+gobuf_sp)(R14)
-	MOVQ	$0, (g_sched+gobuf_ret)(R14)
 	MOVQ	BP, (g_sched+gobuf_bp)(R14)
 	// Assert ctxt is zero. See func save.
 	MOVQ	(g_sched+gobuf_ctxt)(R14), R9
@@ -1679,11 +1677,6 @@ DATA shifts<>+0xf0(SB)/8, $0x0807060504030201
 DATA shifts<>+0xf8(SB)/8, $0xff0f0e0d0c0b0a09
 GLOBL shifts<>(SB),RODATA,$256
 
-TEXT runtime·return0(SB), NOSPLIT, $0
-	MOVL	$0, AX
-	RET
-
-
 // Called from cgo wrappers, this function returns g->m->curg.stack.hi.
 // Must obey the gcc calling convention.
 TEXT _cgo_topofstack(SB),NOSPLIT,$0
@@ -1718,9 +1711,7 @@ TEXT runtime·addmoduledata(SB),NOSPLIT,$0-0
 TEXT ·sigpanic0(SB),NOSPLIT,$0-0
 	get_tls(R14)
 	MOVQ	g(R14), R14
-#ifndef GOOS_plan9
 	XORPS	X15, X15
-#endif
 	JMP	·sigpanic<ABIInternal>(SB)
 
 // gcWriteBarrier informs the GC about heap pointer writes.
@@ -2033,69 +2024,32 @@ TEXT runtime·debugCallPanicked(SB),NOSPLIT,$16-16
 	BYTE	$0xcc
 	RET
 
-// Note: these functions use a special calling convention to save generated code space.
-// Arguments are passed in registers, but the space for those arguments are allocated
-// in the caller's stack frame. These stubs write the args into that stack space and
-// then tail call to the corresponding runtime handler.
-// The tail call makes these stubs disappear in backtraces.
-// Defined as ABIInternal since they do not use the stack-based Go ABI.
-TEXT runtime·panicIndex<ABIInternal>(SB),NOSPLIT,$0-16
-	MOVQ	CX, BX
-	JMP	runtime·goPanicIndex<ABIInternal>(SB)
-TEXT runtime·panicIndexU<ABIInternal>(SB),NOSPLIT,$0-16
-	MOVQ	CX, BX
-	JMP	runtime·goPanicIndexU<ABIInternal>(SB)
-TEXT runtime·panicSliceAlen<ABIInternal>(SB),NOSPLIT,$0-16
-	MOVQ	CX, AX
-	MOVQ	DX, BX
-	JMP	runtime·goPanicSliceAlen<ABIInternal>(SB)
-TEXT runtime·panicSliceAlenU<ABIInternal>(SB),NOSPLIT,$0-16
-	MOVQ	CX, AX
-	MOVQ	DX, BX
-	JMP	runtime·goPanicSliceAlenU<ABIInternal>(SB)
-TEXT runtime·panicSliceAcap<ABIInternal>(SB),NOSPLIT,$0-16
-	MOVQ	CX, AX
-	MOVQ	DX, BX
-	JMP	runtime·goPanicSliceAcap<ABIInternal>(SB)
-TEXT runtime·panicSliceAcapU<ABIInternal>(SB),NOSPLIT,$0-16
-	MOVQ	CX, AX
-	MOVQ	DX, BX
-	JMP	runtime·goPanicSliceAcapU<ABIInternal>(SB)
-TEXT runtime·panicSliceB<ABIInternal>(SB),NOSPLIT,$0-16
-	MOVQ	CX, BX
-	JMP	runtime·goPanicSliceB<ABIInternal>(SB)
-TEXT runtime·panicSliceBU<ABIInternal>(SB),NOSPLIT,$0-16
-	MOVQ	CX, BX
-	JMP	runtime·goPanicSliceBU<ABIInternal>(SB)
-TEXT runtime·panicSlice3Alen<ABIInternal>(SB),NOSPLIT,$0-16
-	MOVQ	DX, AX
-	JMP	runtime·goPanicSlice3Alen<ABIInternal>(SB)
-TEXT runtime·panicSlice3AlenU<ABIInternal>(SB),NOSPLIT,$0-16
-	MOVQ	DX, AX
-	JMP	runtime·goPanicSlice3AlenU<ABIInternal>(SB)
-TEXT runtime·panicSlice3Acap<ABIInternal>(SB),NOSPLIT,$0-16
-	MOVQ	DX, AX
-	JMP	runtime·goPanicSlice3Acap<ABIInternal>(SB)
-TEXT runtime·panicSlice3AcapU<ABIInternal>(SB),NOSPLIT,$0-16
-	MOVQ	DX, AX
-	JMP	runtime·goPanicSlice3AcapU<ABIInternal>(SB)
-TEXT runtime·panicSlice3B<ABIInternal>(SB),NOSPLIT,$0-16
-	MOVQ	CX, AX
-	MOVQ	DX, BX
-	JMP	runtime·goPanicSlice3B<ABIInternal>(SB)
-TEXT runtime·panicSlice3BU<ABIInternal>(SB),NOSPLIT,$0-16
-	MOVQ	CX, AX
-	MOVQ	DX, BX
-	JMP	runtime·goPanicSlice3BU<ABIInternal>(SB)
-TEXT runtime·panicSlice3C<ABIInternal>(SB),NOSPLIT,$0-16
-	MOVQ	CX, BX
-	JMP	runtime·goPanicSlice3C<ABIInternal>(SB)
-TEXT runtime·panicSlice3CU<ABIInternal>(SB),NOSPLIT,$0-16
-	MOVQ	CX, BX
-	JMP	runtime·goPanicSlice3CU<ABIInternal>(SB)
-TEXT runtime·panicSliceConvert<ABIInternal>(SB),NOSPLIT,$0-16
-	MOVQ	DX, AX
-	JMP	runtime·goPanicSliceConvert<ABIInternal>(SB)
+TEXT runtime·panicBounds<ABIInternal>(SB),NOSPLIT,$144-0
+	NO_LOCAL_POINTERS
+	// Save all 14 int registers that could have an index in them.
+	// They may be pointers, but if they are they are dead.
+	MOVQ	AX, 16(SP)
+	MOVQ	CX, 24(SP)
+	MOVQ	DX, 32(SP)
+	MOVQ	BX, 40(SP)
+	// skip SP @ 48(SP)
+	MOVQ	BP, 56(SP)
+	MOVQ	SI, 64(SP)
+	MOVQ	DI, 72(SP)
+	MOVQ	R8, 80(SP)
+	MOVQ	R9, 88(SP)
+	MOVQ	R10, 96(SP)
+	MOVQ	R11, 104(SP)
+	MOVQ	R12, 112(SP)
+	MOVQ	R13, 120(SP)
+	// skip R14 @ 128(SP) (aka G)
+	MOVQ	R15, 136(SP)
+
+	MOVQ	SP, AX		// hide SP read from vet
+	MOVQ	152(AX), AX	// PC immediately after call to panicBounds
+	LEAQ	16(SP), BX
+	CALL	runtime·panicBounds64<ABIInternal>(SB)
+	RET
 
 #ifdef GOOS_android
 // Use the free TLS_SLOT_APP slot #2 on Android Q.

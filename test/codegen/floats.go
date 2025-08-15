@@ -74,6 +74,7 @@ func FusedAdd32(x, y, z float32) float32 {
 	// arm64:"FMADDS"
 	// loong64:"FMADDF\t"
 	// riscv64:"FMADDS\t"
+	// amd64/v3:"VFMADD231SS\t"
 	return x*y + z
 }
 
@@ -98,6 +99,7 @@ func FusedAdd64(x, y, z float64) float64 {
 	// arm64:"FMADDD"
 	// loong64:"FMADDD\t"
 	// riscv64:"FMADDD\t"
+	// amd64/v3:"VFMADD231SD\t"
 	return x*y + z
 }
 
@@ -147,20 +149,14 @@ func CmpWithAdd(a float64, b float64) bool {
 //    Non-floats    //
 // ---------------- //
 
-// We should make sure that the compiler doesn't generate floating point
-// instructions for non-float operations on Plan 9, because floating point
-// operations are not allowed in the note handler.
-
 func ArrayZero() [16]byte {
 	// amd64:"MOVUPS"
-	// plan9/amd64/:-"MOVUPS"
 	var a [16]byte
 	return a
 }
 
 func ArrayCopy(a [16]byte) (b [16]byte) {
 	// amd64:"MOVUPS"
-	// plan9/amd64/:-"MOVUPS"
 	b = a
 	return
 }
@@ -176,6 +172,7 @@ func Float64Min(a, b float64) float64 {
 	// riscv64:"FMIN"
 	// ppc64/power9:"XSMINJDP"
 	// ppc64/power10:"XSMINJDP"
+	// s390x: "WFMINDB"
 	return min(a, b)
 }
 
@@ -186,6 +183,7 @@ func Float64Max(a, b float64) float64 {
 	// riscv64:"FMAX"
 	// ppc64/power9:"XSMAXJDP"
 	// ppc64/power10:"XSMAXJDP"
+	// s390x: "WFMAXDB"
 	return max(a, b)
 }
 
@@ -196,6 +194,7 @@ func Float32Min(a, b float32) float32 {
 	// riscv64:"FMINS"
 	// ppc64/power9:"XSMINJDP"
 	// ppc64/power10:"XSMINJDP"
+	// s390x: "WFMINSB"
 	return min(a, b)
 }
 
@@ -206,6 +205,7 @@ func Float32Max(a, b float32) float32 {
 	// riscv64:"FMAXS"
 	// ppc64/power9:"XSMAXJDP"
 	// ppc64/power10:"XSMAXJDP"
+	// s390x: "WFMAXSB"
 	return max(a, b)
 }
 

@@ -193,10 +193,8 @@ TEXT gogo<>(SB), NOSPLIT|NOFRAME, $0
 	MOVD	0(g), R4
 	MOVD	gobuf_sp(R5), R15
 	MOVD	gobuf_lr(R5), LR
-	MOVD	gobuf_ret(R5), R3
 	MOVD	gobuf_ctxt(R5), R12
 	MOVD	$0, gobuf_sp(R5)
-	MOVD	$0, gobuf_ret(R5)
 	MOVD	$0, gobuf_lr(R5)
 	MOVD	$0, gobuf_ctxt(R5)
 	CMP	R0, R0 // set condition codes for == test, needed by stack split
@@ -522,7 +520,6 @@ TEXT gosave_systemstack_switch<>(SB),NOSPLIT|NOFRAME,$0
 	MOVD	R1, (g_sched+gobuf_pc)(g)
 	MOVD	R15, (g_sched+gobuf_sp)(g)
 	MOVD	$0, (g_sched+gobuf_lr)(g)
-	MOVD	$0, (g_sched+gobuf_ret)(g)
 	// Assert ctxt is zero. See func save.
 	MOVD	(g_sched+gobuf_ctxt)(g), R1
 	CMPBEQ	R1, $0, 2(PC)
@@ -767,10 +764,6 @@ TEXT runtime·memhash32(SB),NOSPLIT|NOFRAME,$0-24
 TEXT runtime·memhash64(SB),NOSPLIT|NOFRAME,$0-24
 	JMP	runtime·memhash64Fallback(SB)
 
-TEXT runtime·return0(SB), NOSPLIT, $0
-	MOVW	$0, R3
-	RET
-
 // Called from cgo wrappers, this function returns g->m->curg.stack.hi.
 // Must obey the gcc calling convention.
 TEXT _cgo_topofstack(SB),NOSPLIT|NOFRAME,$0
@@ -899,76 +892,18 @@ TEXT runtime·gcWriteBarrier8<ABIInternal>(SB),NOSPLIT,$0
 	MOVD	$64, R9
 	JMP	gcWriteBarrier<>(SB)
 
-// Note: these functions use a special calling convention to save generated code space.
-// Arguments are passed in registers, but the space for those arguments are allocated
-// in the caller's stack frame. These stubs write the args into that stack space and
-// then tail call to the corresponding runtime handler.
-// The tail call makes these stubs disappear in backtraces.
-TEXT runtime·panicIndex(SB),NOSPLIT,$0-16
-	MOVD	R0, x+0(FP)
-	MOVD	R1, y+8(FP)
-	JMP	runtime·goPanicIndex(SB)
-TEXT runtime·panicIndexU(SB),NOSPLIT,$0-16
-	MOVD	R0, x+0(FP)
-	MOVD	R1, y+8(FP)
-	JMP	runtime·goPanicIndexU(SB)
-TEXT runtime·panicSliceAlen(SB),NOSPLIT,$0-16
-	MOVD	R1, x+0(FP)
-	MOVD	R2, y+8(FP)
-	JMP	runtime·goPanicSliceAlen(SB)
-TEXT runtime·panicSliceAlenU(SB),NOSPLIT,$0-16
-	MOVD	R1, x+0(FP)
-	MOVD	R2, y+8(FP)
-	JMP	runtime·goPanicSliceAlenU(SB)
-TEXT runtime·panicSliceAcap(SB),NOSPLIT,$0-16
-	MOVD	R1, x+0(FP)
-	MOVD	R2, y+8(FP)
-	JMP	runtime·goPanicSliceAcap(SB)
-TEXT runtime·panicSliceAcapU(SB),NOSPLIT,$0-16
-	MOVD	R1, x+0(FP)
-	MOVD	R2, y+8(FP)
-	JMP	runtime·goPanicSliceAcapU(SB)
-TEXT runtime·panicSliceB(SB),NOSPLIT,$0-16
-	MOVD	R0, x+0(FP)
-	MOVD	R1, y+8(FP)
-	JMP	runtime·goPanicSliceB(SB)
-TEXT runtime·panicSliceBU(SB),NOSPLIT,$0-16
-	MOVD	R0, x+0(FP)
-	MOVD	R1, y+8(FP)
-	JMP	runtime·goPanicSliceBU(SB)
-TEXT runtime·panicSlice3Alen(SB),NOSPLIT,$0-16
-	MOVD	R2, x+0(FP)
-	MOVD	R3, y+8(FP)
-	JMP	runtime·goPanicSlice3Alen(SB)
-TEXT runtime·panicSlice3AlenU(SB),NOSPLIT,$0-16
-	MOVD	R2, x+0(FP)
-	MOVD	R3, y+8(FP)
-	JMP	runtime·goPanicSlice3AlenU(SB)
-TEXT runtime·panicSlice3Acap(SB),NOSPLIT,$0-16
-	MOVD	R2, x+0(FP)
-	MOVD	R3, y+8(FP)
-	JMP	runtime·goPanicSlice3Acap(SB)
-TEXT runtime·panicSlice3AcapU(SB),NOSPLIT,$0-16
-	MOVD	R2, x+0(FP)
-	MOVD	R3, y+8(FP)
-	JMP	runtime·goPanicSlice3AcapU(SB)
-TEXT runtime·panicSlice3B(SB),NOSPLIT,$0-16
-	MOVD	R1, x+0(FP)
-	MOVD	R2, y+8(FP)
-	JMP	runtime·goPanicSlice3B(SB)
-TEXT runtime·panicSlice3BU(SB),NOSPLIT,$0-16
-	MOVD	R1, x+0(FP)
-	MOVD	R2, y+8(FP)
-	JMP	runtime·goPanicSlice3BU(SB)
-TEXT runtime·panicSlice3C(SB),NOSPLIT,$0-16
-	MOVD	R0, x+0(FP)
-	MOVD	R1, y+8(FP)
-	JMP	runtime·goPanicSlice3C(SB)
-TEXT runtime·panicSlice3CU(SB),NOSPLIT,$0-16
-	MOVD	R0, x+0(FP)
-	MOVD	R1, y+8(FP)
-	JMP	runtime·goPanicSlice3CU(SB)
-TEXT runtime·panicSliceConvert(SB),NOSPLIT,$0-16
-	MOVD	R2, x+0(FP)
-	MOVD	R3, y+8(FP)
-	JMP	runtime·goPanicSliceConvert(SB)
+TEXT runtime·panicBounds<ABIInternal>(SB),NOSPLIT,$144-0
+	NO_LOCAL_POINTERS
+	// Save all 16 int registers that could have an index in them.
+	// They may be pointers, but if they are they are dead.
+	STMG	R0, R12, 24(R15)
+	// Note that R10 @ 104 is not needed, it is an assembler temp
+	// skip R13 aka G @ 128
+	// skip R14 aka LR @ 136
+	// skip R15 aka SP @ 144
+
+	MOVD	R14, 8(R15)	// PC immediately after call to panicBounds
+	ADD	$24, R15, R0	// pointer to save area
+	MOVD	R0, 16(R15)
+	CALL	runtime·panicBounds64<ABIInternal>(SB)
+	RET

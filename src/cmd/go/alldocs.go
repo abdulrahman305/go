@@ -211,15 +211,16 @@
 //		-modfile flag by trimming the ".mod" extension and appending ".sum".
 //	-overlay file
 //		read a JSON config file that provides an overlay for build operations.
-//		The file is a JSON struct with a single field, named 'Replace', that
+//		The file is a JSON object with a single field, named 'Replace', that
 //		maps each disk file path (a string) to its backing file path, so that
 //		a build will run as if the disk file path exists with the contents
 //		given by the backing file paths, or as if the disk file path does not
 //		exist if its backing file path is empty. Support for the -overlay flag
 //		has some limitations: importantly, cgo files included from outside the
 //		include path must be in the same directory as the Go package they are
-//		included from, and overlays will not appear when binaries and tests are
-//		run through go run and go test respectively.
+//		included from, overlays will not appear when binaries and tests are
+//		run through go run and go test respectively, and files beneath
+//		GOMODCACHE may not be replaced.
 //	-pgo file
 //		specify the file path of a profile for profile-guided optimization (PGO).
 //		When the special name "auto" is specified, for each main package in the
@@ -404,6 +405,8 @@
 //
 //	go doc
 //		Show documentation for current package.
+//	go doc -http
+//		Serve HTML documentation over HTTP for the current package.
 //	go doc Foo
 //		Show documentation for Foo in the current package.
 //		(Foo starts with a capital letter so it cannot match
@@ -438,26 +441,28 @@
 //
 // Flags:
 //
-//	-all
-//		Show all the documentation for the package.
-//	-c
-//		Respect case when matching symbols.
-//	-cmd
-//		Treat a command (package main) like a regular package.
-//		Otherwise package main's exported symbols are hidden
-//		when showing the package's top-level documentation.
-//	-short
-//		One-line representation for each symbol.
-//	-src
-//		Show the full source code for the symbol. This will
-//		display the full Go source of its declaration and
-//		definition, such as a function definition (including
-//		the body), type declaration or enclosing const
-//		block. The output may therefore include unexported
-//		details.
-//	-u
-//		Show documentation for unexported as well as exported
-//		symbols, methods, and fields.
+//		-all
+//			Show all the documentation for the package.
+//		-c
+//			Respect case when matching symbols.
+//		-cmd
+//			Treat a command (package main) like a regular package.
+//			Otherwise package main's exported symbols are hidden
+//			when showing the package's top-level documentation.
+//	  	-http
+//			Serve HTML docs over HTTP.
+//		-short
+//			One-line representation for each symbol.
+//		-src
+//			Show the full source code for the symbol. This will
+//			display the full Go source of its declaration and
+//			definition, such as a function definition (including
+//			the body), type declaration or enclosing const
+//			block. The output may therefore include unexported
+//			details.
+//		-u
+//			Show documentation for unexported as well as exported
+//			symbols, methods, and fields.
 //
 // # Print Go environment information
 //
@@ -738,11 +743,6 @@
 // suggested Go toolchain, see https://go.dev/doc/toolchain.
 //
 // For more about specifying packages, see 'go help packages'.
-//
-// This text describes the behavior of get using modules to manage source
-// code and dependencies. If instead the go command is running in GOPATH
-// mode, the details of get's flags and effects change, as does 'go help get'.
-// See 'go help gopath-get'.
 //
 // See also: go build, go install, go clean, go mod.
 //
@@ -1075,8 +1075,8 @@
 //
 // The -retracted flag causes list to report information about retracted
 // module versions. When -retracted is used with -f or -json, the Retracted
-// field will be set to a string explaining why the version was retracted.
-// The string is taken from comments on the retract directive in the
+// field explains why the version was retracted.
+// The strings are taken from comments on the retract directive in the
 // module's go.mod file. When -retracted is used with -versions, retracted
 // versions are listed together with unretracted versions. The -retracted
 // flag may be used with or without -m.
@@ -1263,9 +1263,13 @@
 // The -tool=path and -droptool=path flags add and drop a tool declaration
 // for the given path.
 //
+// The -ignore=path and -dropignore=path flags add and drop a ignore declaration
+// for the given path.
+//
 // The -godebug, -dropgodebug, -require, -droprequire, -exclude, -dropexclude,
-// -replace, -dropreplace, -retract, -dropretract, -tool, and -droptool editing
-// flags may be repeated, and the changes are applied in the order given.
+// -replace, -dropreplace, -retract, -dropretract, -tool, -droptool, -ignore,
+// and -dropignore editing flags may be repeated, and the changes are applied
+// in the order given.
 //
 // The -print flag prints the final go.mod in its text format instead of
 // writing it back to go.mod.
@@ -1320,6 +1324,10 @@
 //		Path string
 //	}
 //
+//	type Ignore struct {
+//		Path string
+//	}
+//
 // Retract entries representing a single version (not an interval) will have
 // the "Low" and "High" fields set to the same value.
 //
@@ -1362,8 +1370,7 @@
 //
 // Init accepts one optional argument, the module path for the new module. If the
 // module path argument is omitted, init will attempt to infer the module path
-// using import comments in .go files, vendoring tool configuration files (like
-// Gopkg.lock), and the current directory (if in GOPATH).
+// using import comments in .go files and the current directory (if in GOPATH).
 //
 // See https://golang.org/ref/mod#go-mod-init for more about 'go mod init'.
 //
@@ -1894,8 +1901,9 @@
 //
 // The rule for a match in the cache is that the run involves the same
 // test binary and the flags on the command line come entirely from a
-// restricted set of 'cacheable' test flags, defined as -benchtime, -cpu,
-// -list, -parallel, -run, -short, -timeout, -failfast, -fullpath and -v.
+// restricted set of 'cacheable' test flags, defined as -benchtime,
+// -coverprofile, -cpu, -failfast, -fullpath, -list, -outputdir, -parallel,
+// -run, -short, -skip, -timeout and -v.
 // If a run of go test has any test or non-test flags outside this set,
 // the result is not cached. To disable test caching, use any test flag
 // or argument other than the cacheable flags. The idiomatic way to disable
@@ -1958,13 +1966,20 @@
 // The -n flag causes tool to print the command that would be
 // executed but not execute it.
 //
+// The -modfile=file.mod build flag causes tool to use an alternate file
+// instead of the go.mod in the module root directory.
+//
+// Tool also provides the -C, -overlay, and -modcacherw build flags.
+//
+// For more about build flags, see 'go help build'.
+//
 // For more about each builtin tool command, see 'go doc cmd/<command>'.
 //
 // # Print Go version
 //
 // Usage:
 //
-//	go version [-m] [-v] [file ...]
+//	go version [-m] [-v] [-json] [file ...]
 //
 // Version prints the build information for Go binary files.
 //
@@ -1982,6 +1997,9 @@
 // module version information, when available. In the output, the module
 // information consists of multiple lines following the version line, each
 // indented by a leading tab character.
+//
+// The -json flag is similar to -m but outputs the runtime/debug.BuildInfo in JSON format.
+// If flag -json is specified without -m, go version reports an error.
 //
 // See also: go doc runtime/debug.BuildInfo.
 //
@@ -2105,8 +2123,8 @@
 //     (or ppc64le.power8, ppc64le.power9, and ppc64le.power10)
 //     feature build tags.
 //   - For GOARCH=riscv64,
-//     GORISCV64=rva20u64 and rva22u64 correspond to the riscv64.rva20u64
-//     and riscv64.rva22u64 build tags.
+//     GORISCV64=rva20u64, rva22u64 and rva23u64 correspond to the riscv64.rva20u64,
+//     riscv64.rva22u64 and riscv64.rva23u64 build tags.
 //   - For GOARCH=wasm, GOWASM=satconv and signext
 //     correspond to the wasm.satconv and wasm.signext feature build tags.
 //
@@ -2186,7 +2204,7 @@
 // fields of all events to reconstruct the text format output, as it would
 // have appeared from go build without the -json flag.
 //
-// Note that there may also be non-JSON error text on stdnard error, even
+// Note that there may also be non-JSON error text on standard error, even
 // with the -json flag. Typically, this indicates an early, serious error.
 // Consumers should be robust to this.
 //
@@ -2250,9 +2268,11 @@
 //
 // The second is the SWIG program, which is a general tool for
 // interfacing between languages. For information on SWIG see
-// http://swig.org/. When running go build, any file with a .swig
+// https://swig.org/. When running go build, any file with a .swig
 // extension will be passed to SWIG. Any file with a .swigcxx extension
-// will be passed to SWIG with the -c++ option.
+// will be passed to SWIG with the -c++ option. A package can't be just
+// a .swig or .swigcxx file; there must be at least one .go file, even if
+// it has just a package clause.
 //
 // When either cgo or SWIG is used, go build will pass any .c, .m, .s, .S
 // or .sx files to the C compiler, and any .cc, .cpp, .cxx files to the C++
@@ -2337,10 +2357,15 @@
 //		The directory where 'go install' will install a command.
 //	GOCACHE
 //		The directory where the go command will store cached
-//		information for reuse in future builds.
+//		information for reuse in future builds. Must be an absolute path.
+//	GOCACHEPROG
+//		A command (with optional space-separated flags) that implements an
+//		external go command build cache.
+//		See 'go doc cmd/go/internal/cacheprog'.
 //	GODEBUG
-//		Enable various debugging facilities. See https://go.dev/doc/godebug
-//		for details.
+//		Enable various debugging facilities for programs built with Go,
+//		including the go command. Cannot be set using 'go env -w'.
+//		See https://go.dev/doc/godebug for details.
 //	GOENV
 //		The location of the Go environment configuration file.
 //		Cannot be set using 'go env -w'.
@@ -2448,6 +2473,11 @@
 //	GOARM
 //		For GOARCH=arm, the ARM architecture for which to compile.
 //		Valid values are 5, 6, 7.
+//		When the Go tools are built on an arm system,
+//		the default value is set based on what the build system supports.
+//		When the Go tools are not built on an arm system
+//		(that is, when building a cross-compiler),
+//		the default value is 7.
 //		The value can be followed by an option specifying how to implement floating point instructions.
 //		Valid options are ,softfloat (default for 5) and ,hardfloat (default for 6 and 7).
 //	GOARM64
@@ -2468,8 +2498,9 @@
 //		Valid values are power8 (default), power9, power10.
 //	GORISCV64
 //		For GOARCH=riscv64, the RISC-V user-mode application profile for which
-//		to compile. Valid values are rva20u64 (default), rva22u64.
+//		to compile. Valid values are rva20u64 (default), rva22u64, rva23u64.
 //		See https://github.com/riscv/riscv-profiles/blob/main/src/profiles.adoc
+//		and https://github.com/riscv/riscv-profiles/blob/main/src/rva23-profile.adoc
 //	GOWASM
 //		For GOARCH=wasm, comma-separated list of experimental WebAssembly features to use.
 //		Valid values are satconv, signext.
@@ -2479,7 +2510,6 @@
 //	GOCOVERDIR
 //		Directory into which to write code coverage data files
 //		generated by running a "go build -cover" binary.
-//		Requires that GOEXPERIMENT=coverageredesign is enabled.
 //
 // Special-purpose environment variables:
 //
@@ -2497,7 +2527,7 @@
 //		The default is GOFIPS140=off, which makes no FIPS-140 changes at all.
 //		Other values enable FIPS-140 compliance measures and select alternate
 //		versions of the cryptography source code.
-//		See https://go.dev/security/fips140 for details.
+//		See https://go.dev/doc/security/fips140 for details.
 //	GO_EXTLINK_ENABLED
 //		Whether the linker should use external linking mode
 //		when using -linkmode=auto with code that uses cgo.
@@ -2602,7 +2632,7 @@
 //		BlankLine     = '\n' .
 //
 //	Example:
-//		https://example.com/
+//		https://example.com
 //		https://example.net/api/
 //
 //		Authorization: Basic <token>
@@ -2612,7 +2642,7 @@
 //		Example: Data
 //
 //	If the server responds with any 4xx code, the go command will write the
-//	following to the programs' stdin:
+//	following to the program's stdin:
 //		Response      = StatusLine { HeaderLine } BlankLine .
 //		StatusLine    = Protocol Space Status '\n' .
 //		Protocol      = /* HTTP protocol */ .
@@ -2627,8 +2657,7 @@
 //		Content-Type: text/plain; charset=utf-8
 //		Date: Thu, 07 Nov 2024 18:43:09 GMT
 //
-//	Note: at least for HTTP 1.1, the contents written to stdin can be parsed
-//	as an HTTP response.
+//	Note: it is safe to use net/http.ReadResponse to parse this input.
 //
 // Before the first HTTPS fetch, the go command will invoke each GOAUTH
 // command in the list with no additional arguments and no input.
@@ -2913,12 +2942,12 @@
 //	import "example.org/user/foo.hg"
 //
 // denotes the root directory of the Mercurial repository at
-// example.org/user/foo or foo.hg, and
+// example.org/user/foo, and
 //
 //	import "example.org/repo.git/foo/bar"
 //
 // denotes the foo/bar directory of the Git repository at
-// example.org/repo or repo.git.
+// example.org/repo.
 //
 // When a version control system supports multiple protocols,
 // each is tried in turn when downloading. For example, a Git
@@ -2938,6 +2967,11 @@
 //
 //	<meta name="go-import" content="import-prefix vcs repo-root">
 //
+// Starting in Go 1.25, an optional subdirectory will be recognized by the
+// go command:
+//
+//	<meta name="go-import" content="import-prefix vcs repo-root subdir">
+//
 // The import-prefix is the import path corresponding to the repository
 // root. It must be a prefix or an exact match of the package being
 // fetched with "go get". If it's not an exact match, another http
@@ -2951,6 +2985,12 @@
 //
 // The repo-root is the root of the version control system
 // containing a scheme and not containing a .vcs qualifier.
+//
+// The subdir specifies the directory within the repo-root where the
+// Go module's root (including its go.mod file) is located. It allows
+// you to organize your repository with the Go module code in a subdirectory
+// rather than directly at the repository's root.
+// If set, all vcs tags must be prefixed with "subdir". i.e. "subdir/v1.2.3"
 //
 // For example,
 //
@@ -2966,14 +3006,17 @@
 //	<meta name="go-import" content="example.org git https://code.org/r/p/exproj">
 //
 // the go tool will verify that https://example.org/?go-get=1 contains the
-// same meta tag and then git clone https://code.org/r/p/exproj into
-// GOPATH/src/example.org.
+// same meta tag and then download the code from the Git repository at https://code.org/r/p/exproj
 //
-// When using GOPATH, downloaded packages are written to the first directory
-// listed in the GOPATH environment variable.
-// (See 'go help gopath-get' and 'go help gopath'.)
+// If that page contains the meta tag
 //
-// When using modules, downloaded packages are stored in the module cache.
+//	<meta name="go-import" content="example.org git https://code.org/r/p/exproj foo/subdir">
+//
+// the go tool will verify that https://example.org/?go-get=1 contains the same meta
+// tag and then download the code from the "foo/subdir" subdirectory within the Git repository
+// at https://code.org/r/p/exproj
+//
+// Downloaded packages are stored in the module cache.
 // See https://golang.org/ref/mod#module-cache.
 //
 // When using modules, an additional variant of the go-import meta tag is

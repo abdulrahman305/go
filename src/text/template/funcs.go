@@ -62,26 +62,13 @@ func builtins() FuncMap {
 	}
 }
 
-var builtinFuncsOnce struct {
-	sync.Once
-	v map[string]reflect.Value
-}
-
-// builtinFuncsOnce lazily computes & caches the builtinFuncs map.
-// TODO: revert this back to a global map once golang.org/issue/2559 is fixed.
-func builtinFuncs() map[string]reflect.Value {
-	builtinFuncsOnce.Do(func() {
-		builtinFuncsOnce.v = createValueFuncs(builtins())
-	})
-	return builtinFuncsOnce.v
-}
-
-// createValueFuncs turns a FuncMap into a map[string]reflect.Value
-func createValueFuncs(funcMap FuncMap) map[string]reflect.Value {
-	m := make(map[string]reflect.Value)
+// builtinFuncs lazily computes & caches the builtinFuncs map.
+var builtinFuncs = sync.OnceValue(func() map[string]reflect.Value {
+	funcMap := builtins()
+	m := make(map[string]reflect.Value, len(funcMap))
 	addValueFuncs(m, funcMap)
 	return m
-}
+})
 
 // addValueFuncs adds to values the functions in funcs, converting them to reflect.Values.
 func addValueFuncs(out map[string]reflect.Value, in FuncMap) {
@@ -409,7 +396,6 @@ func not(arg reflect.Value) bool {
 
 var (
 	errBadComparisonType = errors.New("invalid type for comparison")
-	errBadComparison     = errors.New("incompatible types for comparison")
 	errNoComparison      = errors.New("missing argument for comparison")
 )
 
@@ -487,7 +473,7 @@ func eq(arg1 reflect.Value, arg2 ...reflect.Value) (bool, error) {
 				truth = arg.Int() >= 0 && arg1.Uint() == uint64(arg.Int())
 			default:
 				if arg1.IsValid() && arg.IsValid() {
-					return false, errBadComparison
+					return false, fmt.Errorf("incompatible types for comparison: %v and %v", arg1.Type(), arg.Type())
 				}
 			}
 		} else {
@@ -553,7 +539,7 @@ func lt(arg1, arg2 reflect.Value) (bool, error) {
 		case k1 == uintKind && k2 == intKind:
 			truth = arg2.Int() >= 0 && arg1.Uint() < uint64(arg2.Int())
 		default:
-			return false, errBadComparison
+			return false, fmt.Errorf("incompatible types for comparison: %v and %v", arg1.Type(), arg2.Type())
 		}
 	} else {
 		switch k1 {

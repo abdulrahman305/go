@@ -130,10 +130,7 @@ func init() {
 		gpspsbg    = gpspg | buildReg("SB")
 		fp         = buildReg("F0 F1 F2 F3 F4 F5 F6 F7 F8 F9 F10 F11 F12 F13 F14 F15 F16 F17 F18 F19 F20 F21 F22 F23 F24 F25 F26 F27 F28 F29 F30 F31")
 		callerSave = gp | fp | buildReg("g") // runtime.setg (and anything calling it) may clobber g
-		r1         = buildReg("R20")
-		r2         = buildReg("R21")
-		r3         = buildReg("R23")
-		r4         = buildReg("R24")
+		first16    = buildReg("R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R18 R19")
 	)
 	// Common regInfo
 	var (
@@ -148,6 +145,7 @@ func init() {
 		gpstore2  = regInfo{inputs: []regMask{gpspsbg, gpg, gpg}}
 		gpxchg    = regInfo{inputs: []regMask{gpspsbg, gpg}, outputs: []regMask{gp}}
 		gpcas     = regInfo{inputs: []regMask{gpspsbg, gpg, gpg}, outputs: []regMask{gp}}
+		preldreg  = regInfo{inputs: []regMask{gpspg}}
 		fp01      = regInfo{inputs: nil, outputs: []regMask{fp}}
 		fp11      = regInfo{inputs: []regMask{fp}, outputs: []regMask{fp}}
 		fp21      = regInfo{inputs: []regMask{fp, fp}, outputs: []regMask{fp}}
@@ -220,6 +218,8 @@ func init() {
 		{name: "XORconst", argLength: 1, reg: gp11, asm: "XOR", aux: "Int64", typ: "UInt64"}, // arg0 ^ auxInt
 		{name: "NOR", argLength: 2, reg: gp21, asm: "NOR", commutative: true},                // ^(arg0 | arg1)
 		{name: "NORconst", argLength: 1, reg: gp11, asm: "NOR", aux: "Int64"},                // ^(arg0 | auxInt)
+		{name: "ANDN", argLength: 2, reg: gp21, asm: "ANDN"},                                 // arg0 & ^arg1
+		{name: "ORN", argLength: 2, reg: gp21, asm: "ORN"},                                   // arg0 | ^arg1
 
 		{name: "FMADDF", argLength: 3, reg: fp31, asm: "FMADDF", commutative: true, typ: "Float32"},   // (arg0 * arg1) + arg2
 		{name: "FMADDD", argLength: 3, reg: fp31, asm: "FMADDD", commutative: true, typ: "Float64"},   // (arg0 * arg1) + arg2
@@ -240,11 +240,17 @@ func init() {
 		{name: "FCOPYSGD", argLength: 2, reg: fp21, asm: "FCOPYSGD"}, // float64
 
 		// shifts
+		{name: "SLL", argLength: 2, reg: gp21, asm: "SLL"},                        // arg0 << arg1, shift amount is mod 32
 		{name: "SLLV", argLength: 2, reg: gp21, asm: "SLLV"},                      // arg0 << arg1, shift amount is mod 64
+		{name: "SLLconst", argLength: 1, reg: gp11, asm: "SLL", aux: "Int64"},     // arg0 << auxInt, auxInt should be in the range 0 to 31.
 		{name: "SLLVconst", argLength: 1, reg: gp11, asm: "SLLV", aux: "Int64"},   // arg0 << auxInt
+		{name: "SRL", argLength: 2, reg: gp21, asm: "SRL"},                        // arg0 >> arg1, shift amount is mod 32
 		{name: "SRLV", argLength: 2, reg: gp21, asm: "SRLV"},                      // arg0 >> arg1, unsigned, shift amount is mod 64
+		{name: "SRLconst", argLength: 1, reg: gp11, asm: "SRL", aux: "Int64"},     // arg0 >> auxInt, auxInt should be in the range 0 to 31.
 		{name: "SRLVconst", argLength: 1, reg: gp11, asm: "SRLV", aux: "Int64"},   // arg0 >> auxInt, unsigned
+		{name: "SRA", argLength: 2, reg: gp21, asm: "SRA"},                        // arg0 >> arg1, shift amount is mod 32
 		{name: "SRAV", argLength: 2, reg: gp21, asm: "SRAV"},                      // arg0 >> arg1, signed, shift amount is mod 64
+		{name: "SRAconst", argLength: 1, reg: gp11, asm: "SRA", aux: "Int64"},     // arg0 >> auxInt, signed, auxInt should be in the range 0 to 31.
 		{name: "SRAVconst", argLength: 1, reg: gp11, asm: "SRAV", aux: "Int64"},   // arg0 >> auxInt, signed
 		{name: "ROTR", argLength: 2, reg: gp21, asm: "ROTR"},                      // arg0 right rotate by (arg1 mod 32) bits
 		{name: "ROTRV", argLength: 2, reg: gp21, asm: "ROTRV"},                    // arg0 right rotate by (arg1 mod 64) bits
@@ -554,17 +560,30 @@ func init() {
 		// Do data barrier. arg0=memorys
 		{name: "LoweredPubBarrier", argLength: 1, asm: "DBAR", hasSideEffects: true},
 
-		// There are three of these functions so that they can have three different register inputs.
-		// When we check 0 <= c <= cap (A), then 0 <= b <= c (B), then 0 <= a <= b (C), we want the
-		// default registers to match so we don't need to copy registers around unnecessarily.
-		{name: "LoweredPanicBoundsA", argLength: 3, aux: "Int64", reg: regInfo{inputs: []regMask{r3, r4}}, typ: "Mem", call: true}, // arg0=idx, arg1=len, arg2=mem, returns memory. AuxInt contains report code (see PanicBounds in genericOps.go).
-		{name: "LoweredPanicBoundsB", argLength: 3, aux: "Int64", reg: regInfo{inputs: []regMask{r2, r3}}, typ: "Mem", call: true}, // arg0=idx, arg1=len, arg2=mem, returns memory. AuxInt contains report code (see PanicBounds in genericOps.go).
-		{name: "LoweredPanicBoundsC", argLength: 3, aux: "Int64", reg: regInfo{inputs: []regMask{r1, r2}}, typ: "Mem", call: true}, // arg0=idx, arg1=len, arg2=mem, returns memory. AuxInt contains report code (see PanicBounds in genericOps.go).
+		// LoweredPanicBoundsRR takes x and y, two values that caused a bounds check to fail.
+		// the RC and CR versions are used when one of the arguments is a constant. CC is used
+		// when both are constant (normally both 0, as prove derives the fact that a [0] bounds
+		// failure means the length must have also been 0).
+		// AuxInt contains a report code (see PanicBounds in genericOps.go).
+		{name: "LoweredPanicBoundsRR", argLength: 3, aux: "Int64", reg: regInfo{inputs: []regMask{first16, first16}}, typ: "Mem", call: true}, // arg0=x, arg1=y, arg2=mem, returns memory.
+		{name: "LoweredPanicBoundsRC", argLength: 2, aux: "PanicBoundsC", reg: regInfo{inputs: []regMask{first16}}, typ: "Mem", call: true},   // arg0=x, arg1=mem, returns memory.
+		{name: "LoweredPanicBoundsCR", argLength: 2, aux: "PanicBoundsC", reg: regInfo{inputs: []regMask{first16}}, typ: "Mem", call: true},   // arg0=y, arg1=mem, returns memory.
+		{name: "LoweredPanicBoundsCC", argLength: 1, aux: "PanicBoundsCC", reg: regInfo{}, typ: "Mem", call: true},                            // arg0=mem, returns memory.
+
+		// Prefetch instruction
+		// Do prefetch arg0 address with option aux. arg0=addr, arg1=memory, aux=option.
+		// Note:
+		//   The aux of PRELDX is actually composed of two values: $hint and $n. bit[4:0]
+		//   is $hint and bit[41:5] is $n.
+		{name: "PRELD", argLength: 2, aux: "Int64", reg: preldreg, asm: "PRELD", hasSideEffects: true},
+		{name: "PRELDX", argLength: 2, aux: "Int64", reg: preldreg, asm: "PRELDX", hasSideEffects: true},
+
+		{name: "ADDshiftLLV", argLength: 2, aux: "Int64", reg: gp21, asm: "ALSLV"}, // arg0 + arg1<<auxInt, the value of auxInt should be in the range [1, 4].
 	}
 
 	blocks := []blockData{
-		{name: "EQ", controls: 1},
-		{name: "NE", controls: 1},
+		{name: "EQZ", controls: 1},  // = 0
+		{name: "NEZ", controls: 1},  // != 0
 		{name: "LTZ", controls: 1},  // < 0
 		{name: "LEZ", controls: 1},  // <= 0
 		{name: "GTZ", controls: 1},  // > 0
@@ -572,7 +591,7 @@ func init() {
 		{name: "FPT", controls: 1},  // FP flag is true
 		{name: "FPF", controls: 1},  // FP flag is false
 		{name: "BEQ", controls: 2},  // controls[0] == controls[1]
-		{name: "BNE", controls: 2},  // controls[0] == controls[1]
+		{name: "BNE", controls: 2},  // controls[0] != controls[1]
 		{name: "BGE", controls: 2},  // controls[0] >= controls[1]
 		{name: "BLT", controls: 2},  // controls[0] < controls[1]
 		{name: "BGEU", controls: 2}, // controls[0] >= controls[1], unsigned

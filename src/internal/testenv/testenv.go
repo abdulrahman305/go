@@ -335,13 +335,27 @@ func CanInternalLink(withCgo bool) bool {
 	return !platform.MustLinkExternal(runtime.GOOS, runtime.GOARCH, withCgo)
 }
 
+// SpecialBuildTypes are interesting build types that may affect linking.
+type SpecialBuildTypes struct {
+	Cgo  bool
+	Asan bool
+	Msan bool
+	Race bool
+}
+
+// NoSpecialBuildTypes indicates a standard, no cgo go build.
+var NoSpecialBuildTypes SpecialBuildTypes
+
 // MustInternalLink checks that the current system can link programs with internal
 // linking.
 // If not, MustInternalLink calls t.Skip with an explanation.
-func MustInternalLink(t testing.TB, withCgo bool) {
-	if !CanInternalLink(withCgo) {
+func MustInternalLink(t testing.TB, with SpecialBuildTypes) {
+	if with.Asan || with.Msan || with.Race {
+		t.Skipf("skipping test: internal linking with sanitizers is not supported")
+	}
+	if !CanInternalLink(with.Cgo) {
 		t.Helper()
-		if withCgo && CanInternalLink(false) {
+		if with.Cgo && CanInternalLink(false) {
 			t.Skipf("skipping test: internal linking on %s/%s is not supported with cgo", runtime.GOOS, runtime.GOARCH)
 		}
 		t.Skipf("skipping test: internal linking on %s/%s is not supported", runtime.GOOS, runtime.GOARCH)
@@ -503,4 +517,27 @@ func ParallelOn64Bit(t *testing.T) {
 		return
 	}
 	t.Parallel()
+}
+
+// CPUProfilingBroken returns true if CPU profiling has known issues on this
+// platform.
+func CPUProfilingBroken() bool {
+	switch runtime.GOOS {
+	case "plan9":
+		// Profiling unimplemented.
+		return true
+	case "aix":
+		// See https://golang.org/issue/45170.
+		return true
+	case "ios", "dragonfly", "netbsd", "illumos", "solaris":
+		// See https://golang.org/issue/13841.
+		return true
+	case "openbsd":
+		if runtime.GOARCH == "arm" || runtime.GOARCH == "arm64" {
+			// See https://golang.org/issue/13841.
+			return true
+		}
+	}
+
+	return false
 }
