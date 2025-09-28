@@ -220,6 +220,15 @@ Note: In the following sections 3.1 to 3.6, "ui4" (4-bit unsigned int immediate)
 	XVMOVQ  offset(Rj), Xd.W8   |  xvldrepl.w  Xd, Rj, si10  |  for i in range(8) : XR[xd].w[i] = load 32 bit memory data from (GR[rj]+SignExtend(si10<<2))
 	XVMOVQ  offset(Rj), Xd.V4   |  xvldrepl.d  Xd, Rj, si9   |  for i in range(4) : XR[xd].d[i] = load 64 bit memory data from (GR[rj]+SignExtend(si9<<3))
 
+	note: In Go assembly, for ease of understanding, offset representing the actual address offset.
+	      However, during platform encoding, the offset is shifted to increase the encodable offset range, as follows:
+
+	   Go assembly           |      platform assembly
+         VMOVQ  1(R4), V5.B16    |      vldrepl.b  v5, r4, $1
+         VMOVQ  2(R4), V5.H8     |      vldrepl.h  v5, r4, $1
+         VMOVQ  8(R4), V5.W4     |      vldrepl.w  v5, r4, $2
+         VMOVQ  8(R4), V5.V2     |      vldrepl.d  v5, r4, $1
+
 # Special instruction encoding definition and description on LoongArch
 
  1. DBAR hint encoding for LA664(Loongson 3A6000) and later micro-architectures, paraphrased
@@ -289,6 +298,46 @@ Note: In the following sections 3.1 to 3.6, "ui4" (4-bit unsigned int immediate)
 
             Go assembly      | instruction Encoding
         ALSLV $4, r4, r5, R6 |      002d9486
+
+5. Note of special memory access instructions
+    Instruction format:
+      MOVWP	offset(Rj), Rd
+      MOVVP	offset(Rj), Rd
+      MOVWP	Rd, offset(Rj)
+      MOVVP	Rd, offset(Rj)
+
+    Mapping between Go and platform assembly:
+               Go assembly      |      platform assembly
+      MOVWP  offset(Rj), Rd     |    ldptr.w  rd, rj, si14
+      MOVVP  offset(Rj), Rd     |    ldptr.d  rd, rj, si14
+      MOVWP  Rd, offset(Rj)     |    stptr.w  rd, rj, si14
+      MOVVP  Rd, offset(Rj)     |    stptr.d  rd, rj, si14
+
+      note: In Go assembly, for ease of understanding, offset is a 16-bit immediate number representing
+            the actual address offset, but in platform assembly, it need a 14-bit immediate number.
+	    si14 = offset>>2
+
+    The addressing calculation for the above instruction involves logically left-shifting the 14-bit
+    immediate number si14 by 2 bits, then sign-extending it, and finally adding it to the value in the
+    general-purpose register rj to obtain the sum.
+
+    For example:
+
+            Go assembly      |      platform assembly
+         MOVWP  8(R4), R5    |      ldptr.w r5, r4, $2
+
+6. Note of special add instrction
+    Mapping between Go and platform assembly:
+              Go assembly        |      platform assembly
+      ADDV16  si16<<16, Rj, Rd   |    addu16i.d  rd, rj, si16
+
+      note: si16 is a 16-bit immediate number, and si16<<16 is the actual operand.
+
+    The addu16i.d instruction logically left-shifts the 16-bit immediate number si16 by 16 bits, then
+    sign-extends it. The resulting data is added to the [63:0] bits of data in the general-purpose register
+    rj, and the sum is written into the general-purpose register rd.
+    The addu16i.d instruction is used in conjunction with the ldptr.w/d and stptr.w/d instructions to
+    accelerate access based on the GOT table in position-independent code.
 */
 
 package loong64

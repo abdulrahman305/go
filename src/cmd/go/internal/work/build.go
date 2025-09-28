@@ -77,8 +77,9 @@ and test commands:
 		The default is GOMAXPROCS, normally the number of CPUs available.
 	-race
 		enable data race detection.
-		Supported only on linux/amd64, freebsd/amd64, darwin/amd64, darwin/arm64, windows/amd64,
-		linux/ppc64le and linux/arm64 (only for 48-bit VMA).
+		Supported only on darwin/amd64, darwin/arm64, freebsd/amd64, linux/amd64,
+		linux/arm64 (only for 48-bit VMA), linux/ppc64le, linux/riscv64 and
+		windows/amd64.
 	-msan
 		enable interoperation with memory sanitizer.
 		Supported only on linux/amd64, linux/arm64, linux/loong64, freebsd/amd64
@@ -383,7 +384,7 @@ func (v *tagsFlag) Set(s string) error {
 
 	// Split on commas, ignore empty strings.
 	*v = []string{}
-	for _, s := range strings.Split(s, ",") {
+	for s := range strings.SplitSeq(s, ",") {
 		if s != "" {
 			*v = append(*v, s)
 		}

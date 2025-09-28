@@ -212,6 +212,8 @@ var optab = []Optab{
 	{AMOVV, C_REG, C_NONE, C_NONE, C_TLS_LE, C_NONE, 53, 16, 0, 0},
 	{AMOVB, C_REG, C_NONE, C_NONE, C_TLS_LE, C_NONE, 53, 16, 0, 0},
 	{AMOVBU, C_REG, C_NONE, C_NONE, C_TLS_LE, C_NONE, 53, 16, 0, 0},
+	{AMOVWP, C_REG, C_NONE, C_NONE, C_SOREG, C_NONE, 73, 4, 0, 0},
+	{AMOVWP, C_REG, C_NONE, C_NONE, C_LOREG, C_NONE, 73, 4, 0, 0},
 
 	{AMOVW, C_LAUTO, C_NONE, C_NONE, C_REG, C_NONE, 36, 12, REGSP, 0},
 	{AMOVWU, C_LAUTO, C_NONE, C_NONE, C_REG, C_NONE, 36, 12, REGSP, 0},
@@ -233,6 +235,8 @@ var optab = []Optab{
 	{AMOVV, C_TLS_LE, C_NONE, C_NONE, C_REG, C_NONE, 54, 16, 0, 0},
 	{AMOVB, C_TLS_LE, C_NONE, C_NONE, C_REG, C_NONE, 54, 16, 0, 0},
 	{AMOVBU, C_TLS_LE, C_NONE, C_NONE, C_REG, C_NONE, 54, 16, 0, 0},
+	{AMOVWP, C_SOREG, C_NONE, C_NONE, C_REG, C_NONE, 74, 4, 0, 0},
+	{AMOVWP, C_LOREG, C_NONE, C_NONE, C_REG, C_NONE, 74, 4, 0, 0},
 
 	{AMOVW, C_SACON, C_NONE, C_NONE, C_REG, C_NONE, 3, 4, REGSP, 0},
 	{AMOVV, C_SACON, C_NONE, C_NONE, C_REG, C_NONE, 3, 4, REGSP, 0},
@@ -262,6 +266,9 @@ var optab = []Optab{
 	{AADDV, C_US12CON, C_NONE, C_NONE, C_REG, C_NONE, 4, 4, 0, 0},
 	{AADDV, C_U12CON, C_REG, C_NONE, C_REG, C_NONE, 10, 8, 0, 0},
 	{AADDV, C_U12CON, C_NONE, C_NONE, C_REG, C_NONE, 10, 8, 0, 0},
+
+	{AADDV16, C_32CON, C_REG, C_NONE, C_REG, C_NONE, 4, 4, 0, 0},
+	{AADDV16, C_32CON, C_NONE, C_NONE, C_REG, C_NONE, 4, 4, 0, 0},
 
 	{AAND, C_UU12CON, C_REG, C_NONE, C_REG, C_NONE, 4, 4, 0, 0},
 	{AAND, C_UU12CON, C_NONE, C_NONE, C_REG, C_NONE, 4, 4, 0, 0},
@@ -436,8 +443,6 @@ var optab = []Optab{
 	{obj.ANOP, C_DCON, C_NONE, C_NONE, C_NONE, C_NONE, 0, 0, 0, 0},  // nop variants, see #40689
 	{obj.ANOP, C_REG, C_NONE, C_NONE, C_NONE, C_NONE, 0, 0, 0, 0},
 	{obj.ANOP, C_FREG, C_NONE, C_NONE, C_NONE, C_NONE, 0, 0, 0, 0},
-	{obj.ADUFFZERO, C_NONE, C_NONE, C_NONE, C_BRAN, C_NONE, 11, 4, 0, 0}, // same as AJMP
-	{obj.ADUFFCOPY, C_NONE, C_NONE, C_NONE, C_BRAN, C_NONE, 11, 4, 0, 0}, // same as AJMP
 }
 
 var atomicInst = map[obj.As]uint32{
@@ -702,6 +707,15 @@ func span0(ctxt *obj.Link, cursym *obj.LSym, newprog obj.ProgAlloc) {
 	// so instruction sequences that use REGTMP are unsafe to
 	// preempt asynchronously.
 	obj.MarkUnsafePoints(c.ctxt, c.cursym.Func().Text, c.newprog, c.isUnsafePoint, c.isRestartable)
+
+	// Now that we know byte offsets, we can generate jump table entries.
+	for _, jt := range cursym.Func().JumpTables {
+		for i, p := range jt.Targets {
+			// The ith jumptable entry points to the p.Pc'th
+			// byte in the function symbol s.
+			jt.Sym.WriteAddr(ctxt, int64(i)*8, 8, cursym, p.Pc)
+		}
+	}
 }
 
 // isUnsafePoint returns whether p is an unsafe point.
@@ -1437,6 +1451,9 @@ func buildop(ctxt *obj.Link) {
 		case AMOVBU:
 			opset(AMOVHU, r0)
 
+		case AMOVWP:
+			opset(AMOVVP, r0)
+
 		case AMUL:
 			opset(AMULU, r0)
 			opset(AMULH, r0)
@@ -1515,13 +1532,12 @@ func buildop(ctxt *obj.Link) {
 			APRELD,
 			APRELDX,
 			AFSEL,
+			AADDV16,
 			obj.ANOP,
 			obj.ATEXT,
 			obj.AFUNCDATA,
 			obj.APCALIGN,
-			obj.APCDATA,
-			obj.ADUFFZERO,
-			obj.ADUFFCOPY:
+			obj.APCDATA:
 			break
 
 		case ARDTIMELW:
@@ -1964,12 +1980,28 @@ func OP_16IRR(op uint32, i uint32, r2 uint32, r3 uint32) uint32 {
 	return op | (i&0xFFFF)<<10 | (r2&0x1F)<<5 | (r3&0x1F)<<0
 }
 
+func OP_14IRR(op uint32, i uint32, r2 uint32, r3 uint32) uint32 {
+	return op | (i&0x3FFF)<<10 | (r2&0x1F)<<5 | (r3&0x1F)<<0
+}
+
 func OP_12IR_5I(op uint32, i1 uint32, r2 uint32, i2 uint32) uint32 {
 	return op | (i1&0xFFF)<<10 | (r2&0x1F)<<5 | (i2&0x1F)<<0
 }
 
 func OP_12IRR(op uint32, i uint32, r2 uint32, r3 uint32) uint32 {
 	return op | (i&0xFFF)<<10 | (r2&0x1F)<<5 | (r3&0x1F)<<0
+}
+
+func OP_11IRR(op uint32, i uint32, r2 uint32, r3 uint32) uint32 {
+	return op | (i&0x7FF)<<10 | (r2&0x1F)<<5 | (r3&0x1F)<<0
+}
+
+func OP_10IRR(op uint32, i uint32, r2 uint32, r3 uint32) uint32 {
+	return op | (i&0x3FF)<<10 | (r2&0x1F)<<5 | (r3&0x1F)<<0
+}
+
+func OP_9IRR(op uint32, i uint32, r2 uint32, r3 uint32) uint32 {
+	return op | (i&0x1FF)<<10 | (r2&0x1F)<<5 | (r3&0x1F)<<0
 }
 
 func OP_8IRR(op uint32, i uint32, r2 uint32, r3 uint32) uint32 {
@@ -2068,7 +2100,14 @@ func (c *ctxt0) asmout(p *obj.Prog, o *Optab, out []uint32) {
 		if r == 0 {
 			r = int(p.To.Reg)
 		}
-		o1 = OP_12IRR(c.opirr(p.As), uint32(v), uint32(r), uint32(p.To.Reg))
+		if p.As == AADDV16 {
+			if v&65535 != 0 {
+				c.ctxt.Diag("%v: the constant must be a multiple of 65536.\n", p)
+			}
+			o1 = OP_16IRR(c.opirr(p.As), uint32(v>>16), uint32(r), uint32(p.To.Reg))
+		} else {
+			o1 = OP_12IRR(c.opirr(p.As), uint32(v), uint32(r), uint32(p.To.Reg))
+		}
 
 	case 5: // syscall
 		v := c.regoff(&p.From)
@@ -2524,7 +2563,28 @@ func (c *ctxt0) asmout(p *obj.Prog, o *Optab, out []uint32) {
 		si := c.regoff(&p.From)
 		Rj := uint32(p.From.Reg & EXT_REG_MASK)
 		Vd := uint32(p.To.Reg & EXT_REG_MASK)
-		o1 = v | uint32(si<<10) | (Rj << 5) | Vd
+		switch v & 0xc00000 {
+		case 0x800000: // [x]vldrepl.b
+			o1 = OP_12IRR(v, uint32(si), Rj, Vd)
+		case 0x400000: // [x]vldrepl.h
+			if si&1 != 0 {
+				c.ctxt.Diag("%v: offset must be a multiple of 2.\n", p)
+			}
+			o1 = OP_11IRR(v, uint32(si>>1), Rj, Vd)
+		case 0x0:
+			switch v & 0x300000 {
+			case 0x200000: // [x]vldrepl.w
+				if si&3 != 0 {
+					c.ctxt.Diag("%v: offset must be a multiple of 4.\n", p)
+				}
+				o1 = OP_10IRR(v, uint32(si>>2), Rj, Vd)
+			case 0x100000: // [x]vldrepl.d
+				if si&7 != 0 {
+					c.ctxt.Diag("%v: offset must be a multiple of 8.\n", p)
+				}
+				o1 = OP_9IRR(v, uint32(si>>3), Rj, Vd)
+			}
+		}
 
 	case 47: // preld  offset(Rbase), $hint
 		offs := c.regoff(&p.From)
@@ -2893,6 +2953,20 @@ func (c *ctxt0) asmout(p *obj.Prog, o *Optab, out []uint32) {
 			o3 = OP_12IRR(c.opirr(ALU52ID), uint32(v>>52), uint32(REGTMP), uint32(REGTMP))
 		}
 		o4 = OP_RRR(c.oprrr(p.As), uint32(REGTMP), uint32(r), uint32(p.To.Reg))
+
+	case 73:
+		v := c.regoff(&p.To)
+		if v&3 != 0 {
+			c.ctxt.Diag("%v: offset must be a multiple of 4.\n", p)
+		}
+		o1 = OP_14IRR(c.opirr(p.As), uint32(v>>2), uint32(p.To.Reg), uint32(p.From.Reg))
+
+	case 74:
+		v := c.regoff(&p.From)
+		if v&3 != 0 {
+			c.ctxt.Diag("%v: offset must be a multiple of 4.\n", p)
+		}
+		o1 = OP_14IRR(c.opirr(-p.As), uint32(v>>2), uint32(p.From.Reg), uint32(p.To.Reg))
 	}
 
 	out[0] = o1
@@ -3979,12 +4053,12 @@ func (c *ctxt0) opirr(a obj.As) uint32 {
 		return 0x00b << 22
 	case AADDVU:
 		return 0x00b << 22
+	case AADDV16:
+		return 0x4 << 26
 
 	case AJMP:
 		return 0x14 << 26
-	case AJAL,
-		obj.ADUFFZERO,
-		obj.ADUFFCOPY:
+	case AJAL:
 		return 0x15 << 26
 
 	case AJIRL:
@@ -4026,6 +4100,10 @@ func (c *ctxt0) opirr(a obj.As) uint32 {
 		return 0x0ad << 22
 	case AMOVD:
 		return 0x0af << 22
+	case AMOVVP:
+		return 0x27 << 24 // stptr.d
+	case AMOVWP:
+		return 0x25 << 24 // stptr.w
 	case -AMOVB:
 		return 0x0a0 << 22
 	case -AMOVBU:
@@ -4044,6 +4122,10 @@ func (c *ctxt0) opirr(a obj.As) uint32 {
 		return 0x0ac << 22
 	case -AMOVD:
 		return 0x0ae << 22
+	case -AMOVVP:
+		return 0x26 << 24 // ldptr.d
+	case -AMOVWP:
+		return 0x24 << 24 // ldptr.w
 	case -AVMOVQ:
 		return 0x0b0 << 22 // vld
 	case -AXVMOVQ:

@@ -225,8 +225,6 @@ const (
 	REGZERO = REG_R0 // set to zero
 	REGLINK = REG_R1
 	REGSP   = REG_R3
-	REGRT1  = REG_R20 // reserved for runtime, duffzero and duffcopy
-	REGRT2  = REG_R21 // reserved for runtime, duffcopy
 	REGCTXT = REG_R29 // context for closures
 	REGG    = REG_R22 // G in loong64
 	REGTMP  = REG_R30 // used by the assembler
@@ -567,6 +565,9 @@ const (
 	AMOVVF
 	AMOVVD
 
+	// 2.2.1.2
+	AADDV16
+
 	// 2.2.1.3
 	AALSLW
 	AALSLWU
@@ -665,6 +666,10 @@ const (
 	// 2.2.3.9
 	ABSTRPICKW
 	ABSTRPICKV
+
+	// 2.2.5.3
+	AMOVWP
+	AMOVVP
 
 	// 2.2.5.4. Prefetch Instructions
 	APRELD
