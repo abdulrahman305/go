@@ -338,7 +338,7 @@ func (n *Named) cleanup() {
 	// Instances can have a nil underlying at the end of type checking — they
 	// will lazily expand it as needed. All other types must have one.
 	if n.inst == nil {
-		n.resolve().under()
+		n.Underlying()
 	}
 	n.check = nil
 }
@@ -565,7 +565,11 @@ func (n *Named) Underlying() Type {
 		}
 	}
 
-	return n.under()
+	if !n.stateHas(underlying) {
+		n.resolveUnderlying()
+	}
+
+	return n.underlying
 }
 
 func (t *Named) String() string { return TypeString(t, nil) }
@@ -576,7 +580,7 @@ func (t *Named) String() string { return TypeString(t, nil) }
 // TODO(rfindley): reorganize the loading and expansion methods under this
 // heading.
 
-// under returns the (possibly expanded) underlying type of n.
+// resolveUnderlying computes the underlying type of n.
 //
 // It does so by following RHS type chains. If a type literal is found, each
 // named type in the chain has its underlying set to that type. Aliases are
@@ -584,24 +588,15 @@ func (t *Named) String() string { return TypeString(t, nil) }
 //
 // This function also checks for instantiated layout cycles, which are
 // reachable only in the case where resolve() expanded an instantiated
-// type which became self-referencing without indirection. If such a
-// cycle is found, the result is Typ[Invalid]; if n.check != nil, the
-// cycle is also reported.
-func (n *Named) under() Type {
+// type which became self-referencing without indirection.
+// If such a cycle is found, the underlying type is set to Typ[Invalid]
+// and a cycle is reported.
+func (n *Named) resolveUnderlying() {
 	assert(n.stateHas(resolved))
 
-	// optimization for likely case
-	if n.stateHas(underlying) {
-		return n.underlying
-	}
-
-	var rhs Type = n
+	var seen map[*Named]int // allocated lazily
 	var u Type
-
-	seen := make(map[*Named]int)
-	var path []Object
-
-	for u == nil {
+	for rhs := Type(n); u == nil; {
 		switch t := rhs.(type) {
 		case nil:
 			u = Typ[Invalid]
@@ -611,25 +606,33 @@ func (n *Named) under() Type {
 
 		case *Named:
 			if i, ok := seen[t]; ok {
-				n.check.cycleError(path[i:], firstInSrc(path[i:]))
+				// compute cycle path
+				path := make([]Object, len(seen))
+				for t, j := range seen {
+					path[j] = t.obj
+				}
+				path = path[i:]
+				// Note: This code may only be called during type checking,
+				//       hence n.check != nil.
+				n.check.cycleError(path, firstInSrc(path))
 				u = Typ[Invalid]
 				break
 			}
 
-			// acquire the lock without checking; performance is probably fine
-			t.resolve()
-			t.mu.Lock()
-			defer t.mu.Unlock()
-
-			// t.underlying might have been set while we were locking
+			// avoid acquiring the lock if we can
 			if t.stateHas(underlying) {
 				u = t.underlying
 				break
 			}
 
+			if seen == nil {
+				seen = make(map[*Named]int)
+			}
 			seen[t] = len(seen)
-			path = append(path, t.obj)
 
+			t.resolve()
+			t.mu.Lock()
+			defer t.mu.Unlock()
 			assert(t.fromRHS != nil || t.allowNilRHS)
 			rhs = t.fromRHS
 
@@ -638,13 +641,11 @@ func (n *Named) under() Type {
 		}
 	}
 
-	// go back up the chain
+	// set underlying for all Named types in the chain
 	for t := range seen {
 		t.underlying = u
 		t.setState(underlying)
 	}
-
-	return u
 }
 
 func (n *Named) lookupMethod(pkg *Package, name string, foldCase bool) (int, *Func) {
