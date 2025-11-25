@@ -29,6 +29,11 @@ type symsStruct struct {
 	GCWriteBarrier            [8]*obj.LSym
 	Goschedguarded            *obj.LSym
 	Growslice                 *obj.LSym
+	GrowsliceBuf              *obj.LSym
+	MoveSlice                 *obj.LSym
+	MoveSliceNoScan           *obj.LSym
+	MoveSliceNoCap            *obj.LSym
+	MoveSliceNoCapNoScan      *obj.LSym
 	InterfaceSwitch           *obj.LSym
 	MallocGC                  *obj.LSym
 	MallocGCSmallNoScan       [27]*obj.LSym
@@ -48,6 +53,7 @@ type symsStruct struct {
 	PanicdottypeI             *obj.LSym
 	Panicnildottype           *obj.LSym
 	Panicoverflow             *obj.LSym
+	PanicSimdImm              *obj.LSym
 	Racefuncenter             *obj.LSym
 	Racefuncexit              *obj.LSym
 	Raceread                  *obj.LSym
@@ -71,6 +77,7 @@ type symsStruct struct {
 	Loong64HasLAM_BH *obj.LSym
 	Loong64HasLSX    *obj.LSym
 	RISCV64HasZbb    *obj.LSym
+	X86HasAVX        *obj.LSym
 	X86HasFMA        *obj.LSym
 	X86HasPOPCNT     *obj.LSym
 	X86HasSSE41      *obj.LSym

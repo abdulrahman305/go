@@ -52,7 +52,7 @@ func findStandardImportPath(path string) string {
 // standard library or if the package was not successfully loaded with
 // LoadPackages or ImportFromFiles, nil is returned.
 func PackageModuleInfo(loaderstate *State, ctx context.Context, pkgpath string) *modinfo.ModulePublic {
-	if isStandardImportPath(pkgpath) || !Enabled(loaderstate) {
+	if isStandardImportPath(pkgpath) || !loaderstate.Enabled() {
 		return nil
 	}
 	m, ok := findModule(loaded, pkgpath)
@@ -69,7 +69,7 @@ func PackageModuleInfo(loaderstate *State, ctx context.Context, pkgpath string) 
 // standard library or if the package was not successfully loaded with
 // LoadPackages or ImportFromFiles, the empty string is returned.
 func PackageModRoot(loaderstate *State, ctx context.Context, pkgpath string) string {
-	if isStandardImportPath(pkgpath) || !Enabled(loaderstate) || cfg.BuildMod == "vendor" {
+	if isStandardImportPath(pkgpath) || !loaderstate.Enabled() || cfg.BuildMod == "vendor" {
 		return ""
 	}
 	m, ok := findModule(loaded, pkgpath)
@@ -84,7 +84,7 @@ func PackageModRoot(loaderstate *State, ctx context.Context, pkgpath string) str
 }
 
 func ModuleInfo(loaderstate *State, ctx context.Context, path string) *modinfo.ModulePublic {
-	if !Enabled(loaderstate) {
+	if !loaderstate.Enabled() {
 		return nil
 	}
 
@@ -128,7 +128,7 @@ func addUpdate(loaderstate *State, ctx context.Context, m *modinfo.ModulePublic)
 		return
 	}
 
-	info, err := Query(loaderstate, ctx, m.Path, "upgrade", m.Version, CheckAllowed)
+	info, err := Query(loaderstate, ctx, m.Path, "upgrade", m.Version, loaderstate.CheckAllowed)
 	if _, ok := errors.AsType[*NoMatchingVersionError](err); ok ||
 		errors.Is(err, fs.ErrNotExist) ||
 		errors.Is(err, ErrDisallowed) {
@@ -189,6 +189,12 @@ func mergeOrigin(m1, m2 *codehost.Origin) *codehost.Origin {
 		merged.TagSum = m2.TagSum
 		merged.TagPrefix = m2.TagPrefix
 	}
+	if m2.RepoSum != "" {
+		if m1.RepoSum != "" && m1.RepoSum != m2.RepoSum {
+			return nil
+		}
+		merged.RepoSum = m2.RepoSum
+	}
 	if m2.Ref != "" {
 		if m1.Ref != "" && m1.Ref != m2.Ref {
 			return nil
@@ -217,9 +223,9 @@ func addVersions(loaderstate *State, ctx context.Context, m *modinfo.ModulePubli
 	// Perhaps that doesn't buy us much, though: we would always have to fetch
 	// all of the version tags to list the available versions anyway.
 
-	allowed := CheckAllowed
+	allowed := loaderstate.CheckAllowed
 	if listRetracted {
-		allowed = CheckExclusions
+		allowed = loaderstate.CheckExclusions
 	}
 	v, origin, err := versions(loaderstate, ctx, m.Path, allowed)
 	if err != nil && m.Error == nil {
@@ -236,7 +242,7 @@ func addRetraction(loaderstate *State, ctx context.Context, m *modinfo.ModulePub
 		return
 	}
 
-	err := CheckRetractions(loaderstate, ctx, module.Version{Path: m.Path, Version: m.Version})
+	err := loaderstate.CheckRetractions(ctx, module.Version{Path: m.Path, Version: m.Version})
 	if err == nil {
 		return
 	} else if _, ok := errors.AsType[*NoMatchingVersionError](err); ok || errors.Is(err, fs.ErrNotExist) {

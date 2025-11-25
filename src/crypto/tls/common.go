@@ -304,11 +304,12 @@ type ConnectionState struct {
 	// client side.
 	ECHAccepted bool
 
+	// HelloRetryRequest indicates whether we sent a HelloRetryRequest if we
+	// are a server, or if we received a HelloRetryRequest if we are a client.
+	HelloRetryRequest bool
+
 	// ekm is a closure exposed via ExportKeyingMaterial.
 	ekm func(label string, context []byte, length int) ([]byte, error)
-
-	// testingOnlyDidHRR is true if a HelloRetryRequest was sent/received.
-	testingOnlyDidHRR bool
 
 	// testingOnlyPeerSignatureAlgorithm is the signature algorithm used by the
 	// peer to sign the handshake. It is not set for resumed connections.
@@ -468,6 +469,10 @@ type ClientHelloInfo struct {
 	// from, or write to, this connection; that will cause the TLS
 	// connection to fail.
 	Conn net.Conn
+
+	// HelloRetryRequest indicates whether the ClientHello was sent in response
+	// to a HelloRetryRequest message.
+	HelloRetryRequest bool
 
 	// config is embedded by the GetCertificate or GetConfigForClient caller,
 	// for use with SupportsCertificate.
@@ -889,13 +894,29 @@ type Config struct {
 // with a specific ECH config known to a client.
 type EncryptedClientHelloKey struct {
 	// Config should be a marshalled ECHConfig associated with PrivateKey. This
-	// must match the config provided to clients byte-for-byte. The config
-	// should only specify the DHKEM(X25519, HKDF-SHA256) KEM ID (0x0020), the
-	// HKDF-SHA256 KDF ID (0x0001), and a subset of the following AEAD IDs:
-	// AES-128-GCM (0x0001), AES-256-GCM (0x0002), ChaCha20Poly1305 (0x0003).
+	// must match the config provided to clients byte-for-byte. The config must
+	// use as KEM one of
+	//
+	//   - DHKEM(P-256, HKDF-SHA256) (0x0010)
+	//   - DHKEM(P-384, HKDF-SHA384) (0x0011)
+	//   - DHKEM(P-521, HKDF-SHA512) (0x0012)
+	//   - DHKEM(X25519, HKDF-SHA256) (0x0020)
+	//
+	// and as KDF one of
+	//
+	//   - HKDF-SHA256 (0x0001)
+	//   - HKDF-SHA384 (0x0002)
+	//   - HKDF-SHA512 (0x0003)
+	//
+	// and as AEAD one of
+	//
+	//   - AES-128-GCM (0x0001)
+	//   - AES-256-GCM (0x0002)
+	//   - ChaCha20Poly1305 (0x0003)
+	//
 	Config []byte
-	// PrivateKey should be a marshalled private key. Currently, we expect
-	// this to be the output of [ecdh.PrivateKey.Bytes].
+	// PrivateKey should be a marshalled private key, in the format expected by
+	// HPKE's DeserializePrivateKey (see RFC 9180), for the KEM used in Config.
 	PrivateKey []byte
 	// SendAsRetry indicates if Config should be sent as part of the list of
 	// retry configs when ECH is requested by the client but rejected by the

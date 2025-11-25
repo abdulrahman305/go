@@ -35,13 +35,6 @@ import (
 	modzip "golang.org/x/mod/zip"
 )
 
-// The downloadCache is used to cache the operation of downloading a module to disk
-// (if it's not already downloaded) and getting the directory it was downloaded to.
-// It is important that downloadCache must not be accessed by any of the exported
-// functions of this package after they return, because it can be modified by the
-// non-thread-safe SetState function
-var downloadCache = new(par.ErrCache[module.Version, string]) // version → directory;
-
 var ErrToolchain = errors.New("internal error: invalid operation on toolchain module")
 
 // Download downloads the specific module version to the
@@ -56,7 +49,7 @@ func Download(ctx context.Context, mod module.Version) (dir string, err error) {
 	}
 
 	// The par.Cache here avoids duplicate work.
-	return downloadCache.Do(mod, func() (string, error) {
+	return Fetcher_.downloadCache.Do(mod, func() (string, error) {
 		dir, err := download(ctx, mod)
 		if err != nil {
 			return "", err
@@ -85,7 +78,7 @@ func Unzip(ctx context.Context, mod module.Version, zipfile string) (dir string,
 		base.Fatal(err)
 	}
 
-	return downloadCache.Do(mod, func() (string, error) {
+	return Fetcher_.downloadCache.Do(mod, func() (string, error) {
 		ctx, span := trace.StartSpan(ctx, "modfetch.Unzip "+mod.String())
 		defer span.Done()
 
@@ -214,9 +207,12 @@ func DownloadZip(ctx context.Context, mod module.Version) (zipfile string, err e
 		}
 		ziphashfile := zipfile + "hash"
 
-		// Return without locking if the zip and ziphash files exist.
+		// Return early if the zip and ziphash files exist.
 		if _, err := os.Stat(zipfile); err == nil {
 			if _, err := os.Stat(ziphashfile); err == nil {
+				if !HaveSum(mod) {
+					checkMod(ctx, mod)
+				}
 				return zipfile, nil
 			}
 		}
@@ -441,9 +437,6 @@ func RemoveAll(dir string) error {
 // accessed by any of the exported functions of this package after they return, because
 // they can be modified by the non-thread-safe SetState function.
 
-var GoSumFile string             // path to go.sum; set by package modload
-var WorkspaceGoSumFiles []string // path to module go.sums in workspace; set by package modload
-
 type modSum struct {
 	mod module.Version
 	sum string
@@ -466,26 +459,58 @@ type modSumStatus struct {
 	used, dirty bool
 }
 
-// State holds a snapshot of the global state of the modfetch package.
-type State struct {
-	goSumFile           string
+// Fetcher holds a snapshot of the global state of the modfetch package.
+type Fetcher struct {
+	// path to go.sum; set by package modload
+	goSumFile string
+	// path to module go.sums in workspace; set by package modload
 	workspaceGoSumFiles []string
-	lookupCache         *par.Cache[lookupCacheKey, Repo]
-	downloadCache       *par.ErrCache[module.Version, string]
-	sumState            sumState
+	// The Lookup cache is used cache the work done by Lookup.
+	// It is important that the global functions of this package that access it do not
+	// do so after they return.
+	lookupCache *par.Cache[lookupCacheKey, Repo]
+	// The downloadCache is used to cache the operation of downloading a module to disk
+	// (if it's not already downloaded) and getting the directory it was downloaded to.
+	// It is important that downloadCache must not be accessed by any of the exported
+	// functions of this package after they return, because it can be modified by the
+	// non-thread-safe SetState function.
+	downloadCache *par.ErrCache[module.Version, string] // version → directory;
+
+	sumState sumState
+}
+
+var Fetcher_ *Fetcher = NewFetcher()
+
+func NewFetcher() *Fetcher {
+	f := new(Fetcher)
+	f.lookupCache = new(par.Cache[lookupCacheKey, Repo])
+	f.downloadCache = new(par.ErrCache[module.Version, string])
+	return f
+}
+
+func (f *Fetcher) GoSumFile() string {
+	return f.goSumFile
+}
+
+func (f *Fetcher) SetGoSumFile(str string) {
+	f.goSumFile = str
+}
+
+func (f *Fetcher) AddWorkspaceGoSumFile(file string) {
+	f.workspaceGoSumFiles = append(f.workspaceGoSumFiles, file)
 }
 
 // Reset resets globals in the modfetch package, so previous loads don't affect
 // contents of go.sum files.
 func Reset() {
-	SetState(State{})
+	SetState(NewFetcher())
 }
 
 // SetState sets the global state of the modfetch package to the newState, and returns the previous
 // global state. newState should have been returned by SetState, or be an empty State.
 // There should be no concurrent calls to any of the exported functions of this package with
 // a call to SetState because it will modify the global state in a non-thread-safe way.
-func SetState(newState State) (oldState State) {
+func SetState(newState *Fetcher) (oldState *Fetcher) {
 	if newState.lookupCache == nil {
 		newState.lookupCache = new(par.Cache[lookupCacheKey, Repo])
 	}
@@ -496,21 +521,21 @@ func SetState(newState State) (oldState State) {
 	goSum.mu.Lock()
 	defer goSum.mu.Unlock()
 
-	oldState = State{
-		goSumFile:           GoSumFile,
-		workspaceGoSumFiles: WorkspaceGoSumFiles,
-		lookupCache:         lookupCache,
-		downloadCache:       downloadCache,
+	oldState = &Fetcher{
+		goSumFile:           Fetcher_.goSumFile,
+		workspaceGoSumFiles: Fetcher_.workspaceGoSumFiles,
+		lookupCache:         Fetcher_.lookupCache,
+		downloadCache:       Fetcher_.downloadCache,
 		sumState:            goSum.sumState,
 	}
 
-	GoSumFile = newState.goSumFile
-	WorkspaceGoSumFiles = newState.workspaceGoSumFiles
+	Fetcher_.SetGoSumFile(newState.goSumFile)
+	Fetcher_.workspaceGoSumFiles = newState.workspaceGoSumFiles
 	// Uses of lookupCache and downloadCache both can call checkModSum,
 	// which in turn sets the used bit on goSum.status for modules.
 	// Set (or reset) them so used can be computed properly.
-	lookupCache = newState.lookupCache
-	downloadCache = newState.downloadCache
+	Fetcher_.lookupCache = newState.lookupCache
+	Fetcher_.downloadCache = newState.downloadCache
 	// Set, or reset all fields on goSum. If being reset to empty, it will be initialized later.
 	goSum.sumState = newState.sumState
 
@@ -522,7 +547,7 @@ func SetState(newState State) (oldState State) {
 // use of go.sum is now enabled.
 // The goSum lock must be held.
 func initGoSum() (bool, error) {
-	if GoSumFile == "" {
+	if Fetcher_.goSumFile == "" {
 		return false, nil
 	}
 	if goSum.m != nil {
@@ -533,7 +558,7 @@ func initGoSum() (bool, error) {
 	goSum.status = make(map[modSum]modSumStatus)
 	goSum.w = make(map[string]map[module.Version][]string)
 
-	for _, f := range WorkspaceGoSumFiles {
+	for _, f := range Fetcher_.workspaceGoSumFiles {
 		goSum.w[f] = make(map[module.Version][]string)
 		_, err := readGoSumFile(goSum.w[f], f)
 		if err != nil {
@@ -541,7 +566,7 @@ func initGoSum() (bool, error) {
 		}
 	}
 
-	enabled, err := readGoSumFile(goSum.m, GoSumFile)
+	enabled, err := readGoSumFile(goSum.m, Fetcher_.goSumFile)
 	goSum.enabled = enabled
 	return enabled, err
 }
@@ -787,7 +812,7 @@ func checkModSum(mod module.Version, h string) error {
 // goSum.mu must be locked.
 func haveModSumLocked(mod module.Version, h string) bool {
 	sumFileName := "go.sum"
-	if strings.HasSuffix(GoSumFile, "go.work.sum") {
+	if strings.HasSuffix(Fetcher_.goSumFile, "go.work.sum") {
 		sumFileName = "go.work.sum"
 	}
 	for _, vh := range goSum.m[mod] {
@@ -931,7 +956,7 @@ Outer:
 	if readonly {
 		return ErrGoSumDirty
 	}
-	if fsys.Replaced(GoSumFile) {
+	if fsys.Replaced(Fetcher_.goSumFile) {
 		base.Fatalf("go: updates to go.sum needed, but go.sum is part of the overlay specified with -overlay")
 	}
 
@@ -941,7 +966,7 @@ Outer:
 		defer unlock()
 	}
 
-	err := lockedfile.Transform(GoSumFile, func(data []byte) ([]byte, error) {
+	err := lockedfile.Transform(Fetcher_.goSumFile, func(data []byte) ([]byte, error) {
 		tidyGoSum := tidyGoSum(data, keep)
 		return tidyGoSum, nil
 	})
@@ -960,7 +985,7 @@ Outer:
 func TidyGoSum(keep map[module.Version]bool) (before, after []byte) {
 	goSum.mu.Lock()
 	defer goSum.mu.Unlock()
-	before, err := lockedfile.Read(GoSumFile)
+	before, err := lockedfile.Read(Fetcher_.goSumFile)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		base.Fatalf("reading go.sum: %v", err)
 	}
@@ -977,7 +1002,7 @@ func tidyGoSum(data []byte, keep map[module.Version]bool) []byte {
 		// truncated the file to remove erroneous hashes, and we shouldn't restore
 		// them without good reason.
 		goSum.m = make(map[module.Version][]string, len(goSum.m))
-		readGoSum(goSum.m, GoSumFile, data)
+		readGoSum(goSum.m, Fetcher_.goSumFile, data)
 		for ms, st := range goSum.status {
 			if st.used && !sumInWorkspaceModulesLocked(ms.mod) {
 				addModSumLocked(ms.mod, ms.sum)

@@ -8,6 +8,7 @@ import (
 	"bufio"
 	"bytes"
 	"cmd/compile/internal/base"
+	"cmd/compile/internal/bloop"
 	"cmd/compile/internal/coverage"
 	"cmd/compile/internal/deadlocals"
 	"cmd/compile/internal/dwarfgen"
@@ -22,6 +23,7 @@ import (
 	"cmd/compile/internal/pkginit"
 	"cmd/compile/internal/reflectdata"
 	"cmd/compile/internal/rttype"
+	"cmd/compile/internal/slice"
 	"cmd/compile/internal/ssa"
 	"cmd/compile/internal/ssagen"
 	"cmd/compile/internal/staticinit"
@@ -186,9 +188,9 @@ func Main(archInit func(*ssagen.ArchInfo)) {
 
 	ir.EscFmt = escape.Fmt
 	ir.IsIntrinsicCall = ssagen.IsIntrinsicCall
+	ir.IsIntrinsicSym = ssagen.IsIntrinsicSym
 	inline.SSADumpInline = ssagen.DumpInline
 	ssagen.InitEnv()
-	ssagen.InitTables()
 
 	types.PtrSize = ssagen.Arch.LinkArch.PtrSize
 	types.RegSize = ssagen.Arch.LinkArch.RegSize
@@ -201,6 +203,11 @@ func Main(archInit func(*ssagen.ArchInfo)) {
 	typecheck.InitUniverse()
 	typecheck.InitRuntime()
 	rttype.Init()
+
+	// Some intrinsics (notably, the simd intrinsics) mention
+	// types "eagerly", thus ssagen must be initialized AFTER
+	// the type system is ready.
+	ssagen.InitTables()
 
 	// Parse and typecheck input.
 	noder.LoadPackage(flag.Args())
@@ -232,6 +239,9 @@ func Main(archInit func(*ssagen.ArchInfo)) {
 			log.Fatalf("%s: PGO error: %v", base.Flag.PgoProfile, err)
 		}
 	}
+
+	// Apply bloop markings.
+	bloop.BloopWalk(typecheck.Target)
 
 	// Interleaved devirtualization and inlining.
 	base.Timer.Start("fe", "devirtualize-and-inline")
@@ -265,6 +275,8 @@ func Main(archInit func(*ssagen.ArchInfo)) {
 	// because large values may contain pointers, it must happen early.
 	base.Timer.Start("fe", "escapes")
 	escape.Funcs(typecheck.Target.Funcs)
+
+	slice.Funcs(typecheck.Target.Funcs)
 
 	loopvar.LogTransformations(transformed)
 
@@ -302,7 +314,7 @@ func Main(archInit func(*ssagen.ArchInfo)) {
 		}
 
 		if nextFunc < len(typecheck.Target.Funcs) {
-			enqueueFunc(typecheck.Target.Funcs[nextFunc])
+			enqueueFunc(typecheck.Target.Funcs[nextFunc], symABIs)
 			nextFunc++
 			continue
 		}
