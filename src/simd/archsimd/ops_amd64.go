@@ -1980,46 +1980,6 @@ func (x Uint8x32) DotProductPairsSaturated(y Int8x32) Int16x16
 // Asm: VPMADDUBSW, CPU Feature: AVX512
 func (x Uint8x64) DotProductPairsSaturated(y Int8x64) Int16x32
 
-/* DotProductQuadruple */
-
-// DotProductQuadruple performs dot products on groups of 4 elements of x and y.
-// DotProductQuadruple(x, y).Add(z) will be optimized to the full form of the underlying instruction.
-//
-// Asm: VPDPBUSD, CPU Feature: AVXVNNI
-func (x Int8x16) DotProductQuadruple(y Uint8x16) Int32x4
-
-// DotProductQuadruple performs dot products on groups of 4 elements of x and y.
-// DotProductQuadruple(x, y).Add(z) will be optimized to the full form of the underlying instruction.
-//
-// Asm: VPDPBUSD, CPU Feature: AVXVNNI
-func (x Int8x32) DotProductQuadruple(y Uint8x32) Int32x8
-
-// DotProductQuadruple performs dot products on groups of 4 elements of x and y.
-// DotProductQuadruple(x, y).Add(z) will be optimized to the full form of the underlying instruction.
-//
-// Asm: VPDPBUSD, CPU Feature: AVX512VNNI
-func (x Int8x64) DotProductQuadruple(y Uint8x64) Int32x16
-
-/* DotProductQuadrupleSaturated */
-
-// DotProductQuadrupleSaturated multiplies performs dot products on groups of 4 elements of x and y.
-// DotProductQuadrupleSaturated(x, y).Add(z) will be optimized to the full form of the underlying instruction.
-//
-// Asm: VPDPBUSDS, CPU Feature: AVXVNNI
-func (x Int8x16) DotProductQuadrupleSaturated(y Uint8x16) Int32x4
-
-// DotProductQuadrupleSaturated multiplies performs dot products on groups of 4 elements of x and y.
-// DotProductQuadrupleSaturated(x, y).Add(z) will be optimized to the full form of the underlying instruction.
-//
-// Asm: VPDPBUSDS, CPU Feature: AVXVNNI
-func (x Int8x32) DotProductQuadrupleSaturated(y Uint8x32) Int32x8
-
-// DotProductQuadrupleSaturated multiplies performs dot products on groups of 4 elements of x and y.
-// DotProductQuadrupleSaturated(x, y).Add(z) will be optimized to the full form of the underlying instruction.
-//
-// Asm: VPDPBUSDS, CPU Feature: AVX512VNNI
-func (x Int8x64) DotProductQuadrupleSaturated(y Uint8x64) Int32x16
-
 /* Equal */
 
 // Equal returns a mask whose elements indicate whether x == y.
@@ -5418,28 +5378,29 @@ func (x Int64x8) SaturateToInt16() Int16x8
 /* SaturateToInt16Concat */
 
 // SaturateToInt16Concat converts element values to int16 with signed saturation.
-// With each 128-bit as a group:
-// The converted group from the first input vector will be packed to the lower part of the result vector,
-// the converted group from the second input vector will be packed to the upper part of the result vector.
+// The converted elements from x will be packed to the lower part of the result vector,
+// the converted elements from y will be packed to the upper part of the result vector.
 //
 // Asm: VPACKSSDW, CPU Feature: AVX
 func (x Int32x4) SaturateToInt16Concat(y Int32x4) Int16x8
 
-// SaturateToInt16Concat converts element values to int16 with signed saturation.
+/* SaturateToInt16ConcatGrouped */
+
+// SaturateToInt16ConcatGrouped converts element values to int16 with signed saturation.
 // With each 128-bit as a group:
-// The converted group from the first input vector will be packed to the lower part of the result vector,
-// the converted group from the second input vector will be packed to the upper part of the result vector.
+// The converted elements from x will be packed to the lower part of the group in the result vector,
+// the converted elements from y will be packed to the upper part of the group in the result vector.
 //
 // Asm: VPACKSSDW, CPU Feature: AVX2
-func (x Int32x8) SaturateToInt16Concat(y Int32x8) Int16x16
+func (x Int32x8) SaturateToInt16ConcatGrouped(y Int32x8) Int16x16
 
-// SaturateToInt16Concat converts element values to int16 with signed saturation.
+// SaturateToInt16ConcatGrouped converts element values to int16 with signed saturation.
 // With each 128-bit as a group:
-// The converted group from the first input vector will be packed to the lower part of the result vector,
-// the converted group from the second input vector will be packed to the upper part of the result vector.
+// The converted elements from x will be packed to the lower part of the group in the result vector,
+// the converted elements from y will be packed to the upper part of the group in the result vector.
 //
 // Asm: VPACKSSDW, CPU Feature: AVX512
-func (x Int32x16) SaturateToInt16Concat(y Int32x16) Int16x32
+func (x Int32x16) SaturateToInt16ConcatGrouped(y Int32x16) Int16x32
 
 /* SaturateToInt32 */
 
@@ -5464,53 +5425,53 @@ func (x Int64x8) SaturateToInt32() Int32x8
 // SaturateToUint8 converts element values to uint8 with unsigned saturation.
 // Results are packed to low elements in the returned vector, its upper elements are zeroed.
 //
-// Asm: VPMOVSWB, CPU Feature: AVX512
-func (x Int16x8) SaturateToUint8() Int8x16
+// Asm: VPMOVUSWB, CPU Feature: AVX512
+func (x Uint16x8) SaturateToUint8() Uint8x16
 
 // SaturateToUint8 converts element values to uint8 with unsigned saturation.
 //
-// Asm: VPMOVSWB, CPU Feature: AVX512
-func (x Int16x16) SaturateToUint8() Int8x16
-
-// SaturateToUint8 converts element values to uint8 with unsigned saturation.
-// Results are packed to low elements in the returned vector, its upper elements are zeroed.
-//
-// Asm: VPMOVSDB, CPU Feature: AVX512
-func (x Int32x4) SaturateToUint8() Int8x16
-
-// SaturateToUint8 converts element values to uint8 with unsigned saturation.
-// Results are packed to low elements in the returned vector, its upper elements are zeroed.
-//
-// Asm: VPMOVSDB, CPU Feature: AVX512
-func (x Int32x8) SaturateToUint8() Int8x16
-
-// SaturateToUint8 converts element values to uint8 with unsigned saturation.
-//
-// Asm: VPMOVSDB, CPU Feature: AVX512
-func (x Int32x16) SaturateToUint8() Int8x16
-
-// SaturateToUint8 converts element values to uint8 with unsigned saturation.
-// Results are packed to low elements in the returned vector, its upper elements are zeroed.
-//
-// Asm: VPMOVSQB, CPU Feature: AVX512
-func (x Int64x2) SaturateToUint8() Int8x16
-
-// SaturateToUint8 converts element values to uint8 with unsigned saturation.
-// Results are packed to low elements in the returned vector, its upper elements are zeroed.
-//
-// Asm: VPMOVSQB, CPU Feature: AVX512
-func (x Int64x4) SaturateToUint8() Int8x16
-
-// SaturateToUint8 converts element values to uint8 with unsigned saturation.
-// Results are packed to low elements in the returned vector, its upper elements are zeroed.
-//
-// Asm: VPMOVSQB, CPU Feature: AVX512
-func (x Int64x8) SaturateToUint8() Int8x16
+// Asm: VPMOVUSWB, CPU Feature: AVX512
+func (x Uint16x16) SaturateToUint8() Uint8x16
 
 // SaturateToUint8 converts element values to uint8 with unsigned saturation.
 //
 // Asm: VPMOVUSWB, CPU Feature: AVX512
 func (x Uint16x32) SaturateToUint8() Uint8x32
+
+// SaturateToUint8 converts element values to uint8 with unsigned saturation.
+// Results are packed to low elements in the returned vector, its upper elements are zeroed.
+//
+// Asm: VPMOVUSDB, CPU Feature: AVX512
+func (x Uint32x4) SaturateToUint8() Uint8x16
+
+// SaturateToUint8 converts element values to uint8 with unsigned saturation.
+// Results are packed to low elements in the returned vector, its upper elements are zeroed.
+//
+// Asm: VPMOVUSDB, CPU Feature: AVX512
+func (x Uint32x8) SaturateToUint8() Uint8x16
+
+// SaturateToUint8 converts element values to uint8 with unsigned saturation.
+//
+// Asm: VPMOVUSDB, CPU Feature: AVX512
+func (x Uint32x16) SaturateToUint8() Uint8x16
+
+// SaturateToUint8 converts element values to uint8 with unsigned saturation.
+// Results are packed to low elements in the returned vector, its upper elements are zeroed.
+//
+// Asm: VPMOVUSQB, CPU Feature: AVX512
+func (x Uint64x2) SaturateToUint8() Uint8x16
+
+// SaturateToUint8 converts element values to uint8 with unsigned saturation.
+// Results are packed to low elements in the returned vector, its upper elements are zeroed.
+//
+// Asm: VPMOVUSQB, CPU Feature: AVX512
+func (x Uint64x4) SaturateToUint8() Uint8x16
+
+// SaturateToUint8 converts element values to uint8 with unsigned saturation.
+// Results are packed to low elements in the returned vector, its upper elements are zeroed.
+//
+// Asm: VPMOVUSQB, CPU Feature: AVX512
+func (x Uint64x8) SaturateToUint8() Uint8x16
 
 /* SaturateToUint16 */
 
@@ -5550,19 +5511,29 @@ func (x Uint64x8) SaturateToUint16() Uint16x8
 /* SaturateToUint16Concat */
 
 // SaturateToUint16Concat converts element values to uint16 with unsigned saturation.
+// The converted elements from x will be packed to the lower part of the result vector,
+// the converted elements from y will be packed to the upper part of the result vector.
 //
 // Asm: VPACKUSDW, CPU Feature: AVX
-func (x Uint32x4) SaturateToUint16Concat(y Uint32x4) Uint16x8
+func (x Int32x4) SaturateToUint16Concat(y Int32x4) Uint16x8
 
-// SaturateToUint16Concat converts element values to uint16 with unsigned saturation.
+/* SaturateToUint16ConcatGrouped */
+
+// SaturateToUint16ConcatGrouped converts element values to uint16 with unsigned saturation.
+// With each 128-bit as a group:
+// The converted elements from x will be packed to the lower part of the group in the result vector,
+// the converted elements from y will be packed to the upper part of the group in the result vector.
 //
 // Asm: VPACKUSDW, CPU Feature: AVX2
-func (x Uint32x8) SaturateToUint16Concat(y Uint32x8) Uint16x16
+func (x Int32x8) SaturateToUint16ConcatGrouped(y Int32x8) Uint16x16
 
-// SaturateToUint16Concat converts element values to uint16 with unsigned saturation.
+// SaturateToUint16ConcatGrouped converts element values to uint16 with unsigned saturation.
+// With each 128-bit as a group:
+// The converted elements from x will be packed to the lower part of the group in the result vector,
+// the converted elements from y will be packed to the upper part of the group in the result vector.
 //
 // Asm: VPACKUSDW, CPU Feature: AVX512
-func (x Uint32x16) SaturateToUint16Concat(y Uint32x16) Uint16x32
+func (x Int32x16) SaturateToUint16ConcatGrouped(y Int32x16) Uint16x32
 
 /* SaturateToUint32 */
 
